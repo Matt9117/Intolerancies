@@ -1,28 +1,37 @@
-name: Build and Deploy
+name: Build & Deploy to Vercel
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  build-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Setup Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 18
+          cache: npm
 
       - name: Install dependencies
         run: npm install --legacy-peer-deps
 
+      # (voliteľné) Stiahni env premenné z Vercelu (ak ich používaš)
+      - name: Vercel pull (env vars)
+        run: npx vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
       - name: Build project
         run: npm run build
 
-      - name: Deploy to Vercel
-       run: npx vercel --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
+      # Rýchlejší deploy z už postaveného artefaktu
+      - name: Deploy to Vercel (prebuilt)
+        run: npx vercel deploy --prebuilt --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
