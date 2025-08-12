@@ -1,4 +1,4 @@
-name: Build & Deploy to Vercel
+name: Deploy to Vercel
 
 on:
   push:
@@ -8,8 +8,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: vercel-deploy
+  cancel-in-progress: true
+
 jobs:
-  build-deploy:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
@@ -20,18 +24,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 18
-          cache: npm
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        run: |
+          npm ci || npm install
 
-      # (voliteľné) Stiahni env premenné z Vercelu (ak ich používaš)
+      # (voliteľné) stiahni env premenné z Vercelu – neuškodí, často pomôže
       - name: Vercel pull (env vars)
         run: npx vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
 
-      - name: Build project
-        run: npm run build
-
-      # Rýchlejší deploy z už postaveného artefaktu
-      - name: Deploy to Vercel (prebuilt)
-        run: npx vercel deploy --prebuilt --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
+      # Deploy bez --prebuilt (Vercel si build spraví sám)
+      - name: Deploy to Vercel
+        run: npx vercel --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
