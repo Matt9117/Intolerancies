@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 
-/** ====== Typy ====== */
+/** ===== Typy ===== */
 type EvalStatus = "safe" | "avoid" | "maybe";
 
 type Intolerances = {
@@ -38,11 +38,12 @@ const defaultProfile: Profile = {
   },
 };
 
-/** ====== Konštanty ====== */
+/** ===== Konštanty ===== */
 const eval_url =
-  import.meta.env.VITE_EVAL_URL || "https://radka-celiakia.vercel.app/api/eval";
+  ((import.meta as any)?.env?.VITE_EVAL_URL as string | undefined) ||
+  "https://radka-celiakia.vercel.app/api/eval";
 
-/** Krátke utility na UI */
+/** UI mini-komponenty */
 const Tag: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <span
     style={{
@@ -81,9 +82,9 @@ function statusPill(s: EvalStatus) {
   );
 }
 
-/** ====== Hlavný komponent ====== */
+/** ===== App ===== */
 export default function App() {
-  /** Profil & perzistencia */
+  /** Profil */
   const [profile, setProfile] = useState<Profile>(() => {
     try {
       const raw = localStorage.getItem("radka_profile");
@@ -92,7 +93,6 @@ export default function App() {
       return defaultProfile;
     }
   });
-
   useEffect(() => {
     localStorage.setItem("radka_profile", JSON.stringify(profile));
   }, [profile]);
@@ -116,16 +116,16 @@ export default function App() {
   const [barcode, setBarcode] = useState("");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
-  const lastCodeRef = useRef<string | null>(null); // aby sme nespúšťali fetch viackrát za sebou
+  const lastCodeRef = useRef<string | null>(null);
 
-  /** Stav produktu */
+  /** Produkt */
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [product, setProduct] = useState<any | null>(null);
   const [evaluation, setEvaluation] = useState<EvalStatus | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
 
-  /** Media constraints pre lepšie čítanie (zadná kamera) */
+  /** Media constraints */
   const constraints: MediaStreamConstraints = useMemo(
     () => ({
       video: useBackCam
@@ -136,7 +136,7 @@ export default function App() {
     [useBackCam]
   );
 
-  /** Funkcia na bezpečné vypnutie kamery */
+  /** Stop kamery (bez .reset()) */
   function stopCamera() {
     try {
       const video = videoRef.current;
@@ -157,16 +157,16 @@ export default function App() {
 
     try {
       readerRef.current = new BrowserMultiFormatReader();
-      // získaj zoznam kamier
+
+      // Zoznam kamier (kvôli deviceId)
       const devices = await BrowserMultiFormatReader.listVideoInputDevices();
       let deviceId: string | undefined;
 
       if (devices.length) {
-        // vyber zadnú ak vieme
-        const back = devices.find((d) =>
-          /back|rear|environment/i.test(d.label)
-        );
-        deviceId = (useBackCam ? back?.deviceId : devices[0]?.deviceId) || devices[0]?.deviceId;
+        const back = devices.find((d) => /back|rear|environment/i.test(d.label));
+        deviceId =
+          (useBackCam ? back?.deviceId : devices[0]?.deviceId) ||
+          devices[0]?.deviceId;
       }
 
       await readerRef.current.decodeFromVideoDevice(
@@ -178,7 +178,6 @@ export default function App() {
             if (code && code !== lastCodeRef.current) {
               lastCodeRef.current = code;
               setBarcode(code);
-              // zastav hneď kameru (žiadne blikanie)
               controls.stop();
               stopCamera();
               setScanning(false);
@@ -195,20 +194,16 @@ export default function App() {
     }
   }
 
-  /** Prepnúť kameru, ak práve neskenujem */
   function toggleCamera() {
     if (scanning) return;
     setUseBackCam((v) => !v);
   }
 
-  /** Čistenie kamery pri unmount */
   useEffect(() => {
-    return () => {
-      stopCamera();
-    };
+    return () => stopCamera();
   }, []);
 
-  /** Fetch + vyhodnotenie */
+  /** OFF fetch + vyhodnotenie */
   async function fetchProduct(code: string) {
     setLoading(true);
     setError(null);
@@ -217,13 +212,13 @@ export default function App() {
     setNotes([]);
 
     try {
-      const url = `https://world.openfoodfacts.org/api/v2/product/${code}.json`;
-      const res = await fetch(url);
+      const res = await fetch(
+        `https://world.openfoodfacts.org/api/v2/product/${code}.json`
+      );
       if (!res.ok) throw new Error("Chyba pripojenia k databáze");
       const data = await res.json();
 
       if (data.status !== 1 || !data.product) {
-        // nepoznáme – skús AI fallback
         await fallbackAI({ code, name: "", ingredients: "", allergens: "" });
         return;
       }
@@ -231,7 +226,6 @@ export default function App() {
       const p = data.product;
       setProduct(p);
 
-      // Vyhodnotenie podľa profilu
       const result = evaluateForProfile(p, profile);
       setEvaluation(result.status);
       setNotes(result.notes);
@@ -254,7 +248,7 @@ export default function App() {
     }
   }
 
-  /** AI fallback – keď OFF nepozná, alebo vyjde “neisté” */
+  /** AI fallback */
   async function fallbackAI(input: {
     code: string;
     name: string;
@@ -289,78 +283,109 @@ export default function App() {
     }
   }
 
-  /** Heuristika podľa profilu */
-  function evaluateForProfile(p: any, prof: Profile): {
-    status: EvalStatus;
-    notes: string[];
-  } {
+  /** Heuristika podľa profilu – bez porovnávania literálov, ktoré by zúžili typy */
+  function evaluateForProfile(
+    p: any,
+    prof: Profile
+  ): { status: EvalStatus; notes: string[] } {
     const ns: string[] = [];
 
     const allergenTags: string[] = p.allergens_tags || [];
     const ingrAnalysis: string[] = p.ingredients_analysis_tags || [];
-
     const ingredientsText = (
       p.ingredients_text_sk ||
       p.ingredients_text_cs ||
+      p.ingredients_text_en ||
       p.ingredients_text ||
       ""
     ).toLowerCase();
 
-    // slovník
-    const dict = {
-      gluten: ["lepok", "pšen", "psen", "wheat", "jačme", "jacme", "barley", "raž", "raz", "rye", "špal", "spelt", "ovos"],
-      milk: ["mlie", "srvát", "whey", "casein", "kaze", "maslo", "smot", "syr", "tvaroh"],
+    const dict: Record<keyof Intolerances, string[]> = {
+      gluten: [
+        "lepok",
+        "pšen",
+        "psen",
+        "wheat",
+        "jačme",
+        "jacme",
+        "barley",
+        "raž",
+        "raz",
+        "rye",
+        "špal",
+        "spelt",
+        "ovos",
+      ],
+      milk: [
+        "mlie",
+        "srvát",
+        "whey",
+        "casein",
+        "kaze",
+        "maslo",
+        "smot",
+        "syr",
+        "tvaroh",
+      ],
       soy: ["sója", "soja", "soy"],
-      nuts: ["orech", "nut", "mandle", "liesk", "vlaš", "kešu", "araš", "peanut", "almond", "hazelnut", "walnut", "cashew"],
+      nuts: [
+        "orech",
+        "nut",
+        "mandle",
+        "liesk",
+        "vlaš",
+        "kešu",
+        "pekan",
+        "pist",
+        "almond",
+        "hazelnut",
+        "walnut",
+        "cashew",
+      ],
       eggs: ["vajc", "egg", "album", "ovalb"],
       sesame: ["sezam", "sesame"],
-    } as Record<keyof Intolerances, string[]>;
+    };
 
-    // helper – kontrola v texte alebo v tagoch
-    function hasRisk(key: keyof Intolerances) {
-      const t = dict[key];
-      const textHit = t.some((frag) => ingredientsText.includes(frag));
-      const tagHit = allergenTags.some((a) => a.toLowerCase().includes(key));
-      const analysisMaybe =
-        key === "gluten"
-          ? ingrAnalysis.some((x) => /may-contain-gluten/i.test(x))
-          : false;
-      return { textHit, tagHit, analysisMaybe };
-    }
-
-    let status: EvalStatus = "maybe";
+    let st: EvalStatus = "maybe";
+    let hardAvoid = false;
 
     (Object.keys(prof.intolerances) as (keyof Intolerances)[]).forEach((k) => {
       if (!prof.intolerances[k]) return;
-      const r = hasRisk(k);
-      if (r.tagHit || r.textHit) {
-        status = "avoid";
-        ns.push(
-          `Obsahuje alebo môže obsahovať zložku podľa profilu: ${labelFor(k)}.`
-        );
-      } else if (r.analysisMaybe) {
-        status = status === "avoid" ? "avoid" : "maybe";
-        ns.push("Upozornenie: môže obsahovať stopy lepku.");
+
+      const textHit = dict[k].some((frag) => ingredientsText.includes(frag));
+      const tagHit = allergenTags.some((a) => a.toLowerCase().includes(k));
+
+      if (textHit || tagHit) {
+        hardAvoid = true;
+        ns.push(`Obsahuje alebo môže obsahovať zložku podľa profilu: ${labelFor(k)}.`);
+      } else if (k === "gluten") {
+        const maybeG = ingrAnalysis.some((x) => /may-contain-gluten/i.test(x));
+        if (maybeG) ns.push("Upozornenie: môže obsahovať stopy lepku.");
       }
     });
 
-    if (status !== "avoid") {
-      // z OFF claims
-      const claims = `${p.labels || ""} ${p.traces || ""} ${(p.traces_tags || []).join(" ")}`.toLowerCase();
-      const saysGF = /gluten[- ]?free|bez lepku|bezlepkov/i.test(claims);
-
-      if (saysGF && prof.intolerances.gluten) {
-        status = "safe";
-        ns.push("Deklarované ako bezlepkové.");
-      } else {
-        ns.push(
-          "Nenašli sa jasné riziká podľa profilu. Ak si nie si istý/istá, skontroluj etiketu."
-        );
-        if (status !== "safe") status = "maybe";
-      }
+    if (hardAvoid) {
+      st = "avoid";
+      return { status: st, notes: ns };
     }
 
-    return { status, notes: ns };
+    // Bez jasného rizika: skús claims
+    const claims = `${p.labels || ""} ${p.traces || ""} ${(p.traces_tags || []).join(
+      " "
+    )}`.toLowerCase();
+    const saysGF = /gluten[- ]?free|bez lepku|bezlepkov/i.test(claims);
+
+    if (saysGF && prof.intolerances.gluten) {
+      st = "safe";
+      ns.push("Deklarované ako bezlepkové.");
+    } else {
+      st = "maybe";
+      ns.push(
+        "Nenašli sa jasné riziká podľa profilu. Ak si nie si istý/istá, skontroluj etiketu."
+      );
+    }
+
+    return { status: st, notes: ns };
   }
 
   function labelFor(k: keyof Intolerances) {
@@ -375,7 +400,7 @@ export default function App() {
     return m[k];
   }
 
-  /** UI helpers */
+  /** ===== UI karty ===== */
   function ProfileCard() {
     return (
       <div style={card}>
@@ -437,11 +462,21 @@ export default function App() {
             <button onClick={toggleCamera} style={btnGhost}>
               Prepnúť kameru
             </button>
-            <label style={{ ...label, display: "flex", alignItems: "center", gap: 8, margin: 0 }}>
+            <label
+              style={{
+                ...label,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                margin: 0,
+              }}
+            >
               <input
                 type="checkbox"
                 checked={scanning}
-                onChange={(e) => (e.target.checked ? startScan() : (stopCamera(), setScanning(false)))}
+                onChange={(e) =>
+                e.target.checked ? startScan() : (stopCamera(), setScanning(false))
+                }
               />
               Kamera
             </label>
@@ -498,9 +533,7 @@ export default function App() {
 
     return (
       <div style={card}>
-        {error && (
-          <div style={alertErr}>{error}</div>
-        )}
+        {error && <div style={alertErr}>{error}</div>}
 
         {product && (
           <div style={{ display: "grid", gap: 10 }}>
@@ -619,11 +652,22 @@ export default function App() {
           <button onClick={toggleCamera} style={btnWhite}>
             Prepnúť kameru
           </button>
-          <label style={{ ...label, display: "flex", alignItems: "center", gap: 8, margin: 0, color: "#0f172a" }}>
+          <label
+            style={{
+              ...label,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              margin: 0,
+              color: "#0f172a",
+            }}
+          >
             <input
               type="checkbox"
               checked={scanning}
-              onChange={(e) => (e.target.checked ? startScan() : (stopCamera(), setScanning(false)))}
+              onChange={(e) =>
+                e.target.checked ? startScan() : (stopCamera(), setScanning(false))
+              }
             />
             Kamera
           </label>
@@ -644,7 +688,7 @@ export default function App() {
   );
 }
 
-/** ====== “Dizajn systém” (inline) ====== */
+/** ===== “Dizajn systém” ===== */
 const container: React.CSSProperties = {
   maxWidth: 880,
   margin: "0 auto",
