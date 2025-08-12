@@ -1,0 +1,61 @@
+name: Android APK (Debug)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install NPM deps
+        run: npm ci || npm install
+
+      # Postav web (Vite) -> výstup do dist/
+      - name: Build web
+        run: npm run build
+
+      # Sync webu do natívnych platforiem (Capacitor)
+      - name: Sync Capacitor (android)
+        run: npx cap sync android
+
+      # Java 17 (Gradle/AGP to vyžaduje)
+      - name: Setup Java (JDK 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Android SDK
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # (voliteľné) Cache Gradlu pre rýchlejšie buildy
+      - name: Gradle cache
+        uses: gradle/gradle-build-action@v2
+
+      # Ak je gradlew v android/
+      - name: Grant Gradle permissions
+        run: chmod +x android/gradlew
+
+      # Build DEBUG APK
+      - name: Build Debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug
+
+      # Uloženie APK ako artifact
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
