@@ -1,98 +1,146 @@
 // api/eval.ts
-import type { VercelRequest, VercelResponse } from "@vercel/node";
+import type { VercelRequest, VercelResponse } from '@vercel/node'
 
+// ==== CORS ====
 const ALLOW_ORIGINS = [
-  "capacitor://localhost",
-  "http://localhost",
-  "http://127.0.0.1",
-  "http://localhost:5173",
-  "https://radka-celiakia.vercel.app"
-];
+  'capacitor://localhost',
+  'http://localhost',
+  'http://127.0.0.1',
+  'https://radka-celiakia.vercel.app',
+  'https://intolerancies.vercel.app',
+]
 
-function setCors(res: VercelResponse, origin?: string) {
-  const allowed = origin && ALLOW_ORIGINS.some(o => origin.startsWith(o));
-  res.setHeader("Access-Control-Allow-Origin", allowed ? origin! : "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+function setCors(res: VercelResponse, origin: string | undefined) {
+  const o = origin || ''
+  const allow = ALLOW_ORIGINS.some(x => o.startsWith(x)) ? o : ALLOW_ORIGINS[3]
+  res.setHeader('Access-Control-Allow-Origin', allow)
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  setCors(res, req.headers.origin);
+// ==== Body typ ====
+type EvalBody = {
+  code?: string
+  name?: string
+  ingredients?: string
+  allergens?: string
+  lang?: 'sk' | 'cs' | 'en'
+}
 
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Method Not Allowed" });
+// ==== Handler ====
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  setCors(res, req.headers.origin)
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).end()
+    return
+  }
+
+  if (req.method !== 'POST') {
+    res.status(405).json({ ok: false, error: 'Method not allowed' })
+    return
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) {
+    res.status(200).json({
+      ok: true,
+      status: 'maybe',
+      notes: ['Chýba OPENAI_API_KEY na Verceli – AI sa preskočila.'],
+    })
+    return
+  }
+
+  let body: EvalBody
+  try {
+    body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body as EvalBody)
+  } catch {
+    res.status(400).json({ ok: false, error: 'Bad JSON body' })
+    return
+  }
+
+  const lang = body.lang || 'sk'
+  const name = body.name || ''
+  const ingredients = body.ingredients || ''
+  const allergens = body.allergens || ''
+  const code = body.code || ''
+
+  // Jednoduchý prompt – pozor, celé je v jedinom template stringu
+  const prompt = `
+Si potravinový poradca pre celiatikov a ľudí s intoleranciami.
+Dostaneš základné údaje o produkte a máš rozhodnúť:
+- status: "safe" (bezpečné), "avoid" (vyhnúť sa), alebo "maybe" (neisté).
+- notes: krátke odôvodnenia v jazyku používateľa.
+
+Kritériá:
+- Ak text alebo alergény obsahujú mlieko (mliečna bielkovina, srvátka, whey, kazeín) → status "avoid".
+- Ak obsahujú lepok (pšenica, jačmeň, raž, špalda, ovos bez deklarácie bezgluténový) → "avoid".
+- Ak je jasne deklarované "bez lepku" a neuvádza sa mlieko → "safe".
+- Inak "maybe".
+
+Vráť presne JSON: {"status":"safe|avoid|maybe","notes":["...","..."]}
+
+Jazyk odpovede: ${lang}
+Názov: ${name}
+Kód: ${code}
+Ingrediencie: ${ingredients}
+Alergény (z DB): ${allergens}
+`.trim()
 
   try {
-    const { code, name, ingredients, allergens, lang, intolerances } = req.body ?? {};
-    if (!code) return res.status(400).json({ ok: false, error: "Missing code" });
-
-    const key = process.env.OPENAI_API_KEY;
-    if (!key) {
-      return res.status(200).json({
-        ok: true,
-        status: "maybe",
-        notes: ["AI kľúč nie je nastavený na serveri. Použité boli iba dáta z OFF."]
-      });
-    }
-
-    const sys = (l: "sk" | "cs") =>
-      l === "cs"
-        ? "Jsi asistent pro hodnocení potravin pro uživatele s intolerancemi (celiakie, mléčná bílkovina atd.). Vrať JSON: {"status":"safe|avoid|maybe","notes":[...]}."
-        : "Si asistent na hodnotenie potravín pre používateľov s intoleranciami (celiakia, mliečna bielkovina atď.). Vráť JSON: {"status":"safe|avoid|maybe","notes":[...]}.";
-
-    const user = `
-EAN: ${code}
-Názov: ${name}
-Ingrediencie: ${ingredients || "-"}
-Alergény (OFF): ${allergens || "-"}
-Intolerancie používateľa: ${(Array.isArray(intolerances)?intolerances:[]).join(", ") || "-"}
-Úloha: Vyhodnoť, či je potravina bezpečná pre tohto konkrétneho používateľa. 
-Ak je jasný dôvod NEVHODNOSTI (napr. obsahuje mliečnu bielkovinu pre APLV, obsahuje lepok pre celiakiu), daj status "avoid". 
-Ak deklarácia jasne potvrdzuje bezpečnosť (napr. bezlepkové a bez mlieka), daj "safe". Inak "maybe". 
-`;
-
-    const resp = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
       headers: {
-        "Authorization": `Bearer ${key}`,
-        "Content-Type": "application/json"
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: 'gpt-4o-mini', // ak by to hádzalo 404 na účte, použi "gpt-3.5-turbo"
+        temperature: 0.2,
         messages: [
-          { role: "system", content: sys((lang as "sk"|"cs") || "sk") },
-          { role: "user", content: user }
+          { role: 'system', content: 'You are a precise JSON generator. Always return strict JSON only.' },
+          { role: 'user', content: prompt },
         ],
-        temperature: 0.2
-      })
-    });
+      }),
+    })
 
     if (!resp.ok) {
-      const txt = await resp.text().catch(() => "");
-      return res.status(200).json({
+      const txt = await resp.text()
+      res.status(200).json({
         ok: true,
-        status: "maybe",
-        notes: ["AI požiadavka zlyhala.", `${resp.status} ${txt}`.trim()]
-      });
+        status: 'maybe',
+        notes: [`AI požiadavka zlyhala (HTTP ${resp.status}).`, txt.slice(0, 300)],
+      })
+      return
     }
 
-    const data = await resp.json();
-    const content: string = data.choices?.[0]?.message?.content || "";
-    let parsed: any = null;
-    try { parsed = JSON.parse(content); } catch {
-      const m = content.match(/\{[\s\S]*\}/);
-      if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
+    const data = await resp.json()
+    const content: string = data.choices?.[0]?.message?.content ?? '{}'
+
+    // Pokus o parse odpovede modelu
+    let parsed: { status?: string; notes?: string[] } = {}
+    try {
+      parsed = JSON.parse(content)
+    } catch {
+      // fallback – niekedy model pridá text okolo JSONu, skús vytiahnuť blok medzi { }
+      const m = content.match(/\{[\s\S]*\}/)
+      if (m) {
+        try {
+          parsed = JSON.parse(m[0])
+        } catch {}
+      }
     }
 
-    const st = (parsed?.status === "safe" || parsed?.status === "avoid" || parsed?.status === "maybe") ? parsed.status : "maybe";
-    const nts: string[] = Array.isArray(parsed?.notes) ? parsed.notes : [content || ""];
+    // Sanitizácia
+    const st = parsed.status === 'safe' || parsed.status === 'avoid' ? parsed.status : 'maybe'
+    const notes = Array.isArray(parsed.notes) && parsed.notes.length ? parsed.notes.slice(0, 5) : ['Nedostatočné údaje.']
 
-    return res.status(200).json({ ok: true, status: st, notes: nts });
+    res.status(200).json({ ok: true, status: st, notes })
   } catch (e: any) {
-    return res.status(200).json({
+    res.status(200).json({
       ok: true,
-      status: "maybe",
-      notes: ["AI výnimka na serveri.", e?.message || "Unknown error"]
-    });
+      status: 'maybe',
+      notes: ['AI požiadavka zlyhala.', String(e?.message || e).slice(0, 300)],
+    })
   }
 }
