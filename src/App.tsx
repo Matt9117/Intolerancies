@@ -1,469 +1,769 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 
+/** ====== Typy ====== */
 type EvalStatus = "safe" | "avoid" | "maybe";
-type AiReply = { ok: boolean; status?: EvalStatus; notes?: string[] };
 
-type IntoleranceKey =
-  | "gluten" | "milk_protein" | "lactose" | "nuts" | "peanut" | "soy" | "egg"
-  | "sesame" | "fish" | "shellfish" | "celery" | "mustard" | "sulphites" | "lupin";
-
-const INTOLERANCES: Record<IntoleranceKey, { sk: string; cs: string; terms: string[] }> = {
-  gluten: { sk: "Lepok", cs: "Lepek", terms: ["lepok","pšenica","psenica","wheat","jačmeň","jacmen","barley","raž","raz","rye","špalda","spelta","spelt","ovos","gluten"] },
-  milk_protein: { sk: "Mliečna bielkovina (APLV)", cs: "Mléčná bílkovina", terms: ["mlieko","mliecna bielkovina","mliečna bielkovina","srvátka","whey","casein","kazein","kazeín","maslo","smotana","syr","tvaroh","mliečny","mléko","syrovátka","kasein"] },
-  lactose: { sk: "Laktóza", cs: "Laktóza", terms: ["laktóza","laktosa","lactose"] },
-  nuts: { sk: "Orechy stromové", cs: "Stromové ořechy", terms: ["lieskové","mandle","vlašské","kešu","pekany","piniové","pistácie","brazilské","hazelnut","almond","walnut","cashew","pecan","pistachio"] },
-  peanut: { sk: "Arašidy", cs: "Arašidy", terms: ["arašidy","arašídy","arašíd","peanut","arachis hypogaea"] },
-  soy: { sk: "Sója", cs: "Sója", terms: ["sója","soja","soy","sojový","sójový","lecitín (sojový)","sojový lecitín","soya"] },
-  egg: { sk: "Vajce", cs: "Vejce", terms: ["vajce","vajcia","vaječný","vaječné","albumín","egg","ovalbumin"] },
-  sesame: { sk: "Sezam", cs: "Sezam", terms: ["sezam","sesame","sezamové"] },
-  fish: { sk: "Ryby", cs: "Ryby", terms: ["ryba","ryby","fish","losos","tuniak","tuna","kapor","treska","cod","lososový"] },
-  shellfish: { sk: "Kôrovce/mäkkýše", cs: "Korýši/Měkkýši", terms: ["kreveta","krab","homár","mušla","slávka","lastúra","krevet","krabí","morský plod","shrimp","crab","lobster","mussel","shellfish"] },
-  celery: { sk: "Zeler", cs: "Celer", terms: ["zeler","celer","celery"] },
-  mustard: { sk: "Horčica", cs: "Hořčice", terms: ["horčica","horčičné semeno","horčičný","mustard","hořčice"] },
-  sulphites: { sk: "Oxidy siričité/siričitany", cs: "Oxidy siřičité/siřičitany", terms: ["oxid siričitý","siričitany","siričitan","oxid siřičitý","siřičitany","sulphites","sulfites","E220","E221","E222","E223","E224","E226","E227","E228"] },
-  lupin: { sk: "Vlčí bôb (lupina)", cs: "Vlčí bob (lupina)", terms: ["vlčí bôb","lupina","lupin","lupine"] },
+type Intolerances = {
+  gluten: boolean;
+  milk: boolean;
+  soy: boolean;
+  nuts: boolean;
+  eggs: boolean;
+  sesame: boolean;
 };
 
 type Profile = {
   name: string;
-  intolerances: IntoleranceKey[];
+  intolerances: Intolerances;
 };
 
-function loadProfile(): Profile | null {
-  try { return JSON.parse(localStorage.getItem("radka_profile") || "null"); } catch { return null; }
-}
-function saveProfile(p: Profile | null) {
-  if (!p) return localStorage.removeItem("radka_profile");
-  localStorage.setItem("radka_profile", JSON.stringify(p));
+type HistoryItem = {
+  code: string;
+  name: string;
+  brand: string;
+  status: EvalStatus;
+  ts: number;
+};
+
+const defaultProfile: Profile = {
+  name: "",
+  intolerances: {
+    gluten: true,
+    milk: true,
+    soy: false,
+    nuts: false,
+    eggs: false,
+    sesame: false,
+  },
+};
+
+/** ====== Konštanty ====== */
+const eval_url =
+  import.meta.env.VITE_EVAL_URL || "https://radka-celiakia.vercel.app/api/eval";
+
+/** Krátke utility na UI */
+const Tag: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <span
+    style={{
+      fontSize: 12,
+      padding: "4px 10px",
+      borderRadius: 999,
+      background: "#f1f5f9",
+      border: "1px solid #e5e7eb",
+    }}
+  >
+    {children}
+  </span>
+);
+
+function statusPill(s: EvalStatus) {
+  const map: Record<EvalStatus, { text: string; bg: string; fg: string }> = {
+    safe: { text: "Bezpečné", bg: "#dcfce7", fg: "#166534" },
+    avoid: { text: "Vyhnúť sa", bg: "#fee2e2", fg: "#991b1b" },
+    maybe: { text: "Neisté", bg: "#fef3c7", fg: "#92400e" },
+  };
+  const cfg = map[s];
+  return (
+    <span
+      style={{
+        fontSize: 12,
+        padding: "6px 10px",
+        borderRadius: 999,
+        background: cfg.bg,
+        color: cfg.fg,
+        border: "1px solid #e5e7eb",
+        fontWeight: 600,
+      }}
+    >
+      {cfg.text}
+    </span>
+  );
 }
 
+/** ====== Hlavný komponent ====== */
 export default function App() {
-  // profile / onboarding
-  const [profile, setProfile] = useState<Profile | null>(loadProfile());
-  const [nameDraft, setNameDraft] = useState(profile?.name || "");
+  /** Profil & perzistencia */
+  const [profile, setProfile] = useState<Profile>(() => {
+    try {
+      const raw = localStorage.getItem("radka_profile");
+      return raw ? JSON.parse(raw) : defaultProfile;
+    } catch {
+      return defaultProfile;
+    }
+  });
 
-  // camera / scanning
-  const [scanning, setScanning] = useState(false);
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [deviceId, setDeviceId] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const readerRef = useRef<BrowserMultiFormatReader | null>(null);
-  const gotOneRef = useRef(false);
+  useEffect(() => {
+    localStorage.setItem("radka_profile", JSON.stringify(profile));
+  }, [profile]);
 
-  // search/product
-  const [barcode, setBarcode] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [product, setProduct] = useState<any>(null);
-  const [status, setStatus] = useState<EvalStatus | null>(null);
-  const [notes, setNotes] = useState<string[]>([]);
-
-  // history
-  const [history, setHistory] = useState<any[]>(() => {
-    try { return JSON.parse(localStorage.getItem("radka_scan_history") || "[]"); } catch { return []; }
+  /** História */
+  const [history, setHistory] = useState<HistoryItem[]>(() => {
+    try {
+      const raw = localStorage.getItem("radka_history");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
   });
   useEffect(() => {
-    localStorage.setItem("radka_scan_history", JSON.stringify(history.slice(0, 100)));
+    localStorage.setItem("radka_history", JSON.stringify(history.slice(0, 50)));
   }, [history]);
 
-  // ---------- camera ----------
-  useEffect(() => {
-    if (!scanning) return;
-    (async () => {
-      try {
-        // ask once to get labels
-        const tmp = await navigator.mediaDevices.getUserMedia({ video: true });
-        tmp.getTracks().forEach(t => t.stop());
-        const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
-        setDevices(cams);
-        if (!deviceId) {
-          const back = cams.find(c => /back|rear|environment/i.test(c.label));
-          setDeviceId(back?.deviceId ?? cams[0]?.deviceId ?? null);
-        }
-      } catch (e) {
-        setError("Kameru sa nepodarilo inicializovať. Skontroluj povolenia.");
-        setScanning(false);
+  /** Skenovanie */
+  const [useBackCam, setUseBackCam] = useState(true);
+  const [scanning, setScanning] = useState(false);
+  const [barcode, setBarcode] = useState("");
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const readerRef = useRef<BrowserMultiFormatReader | null>(null);
+  const lastCodeRef = useRef<string | null>(null); // aby sme nespúšťali fetch viackrát za sebou
+
+  /** Stav produktu */
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [product, setProduct] = useState<any | null>(null);
+  const [evaluation, setEvaluation] = useState<EvalStatus | null>(null);
+  const [notes, setNotes] = useState<string[]>([]);
+
+  /** Media constraints pre lepšie čítanie (zadná kamera) */
+  const constraints: MediaStreamConstraints = useMemo(
+    () => ({
+      video: useBackCam
+        ? { facingMode: { exact: "environment" }, width: { ideal: 1280 } }
+        : { facingMode: "user", width: { ideal: 1280 } },
+      audio: false,
+    }),
+    [useBackCam]
+  );
+
+  /** Funkcia na bezpečné vypnutie kamery */
+  function stopCamera() {
+    try {
+      const video = videoRef.current;
+      const stream = (video?.srcObject as MediaStream) || null;
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      if (video) video.srcObject = null;
+    } catch {}
+  }
+
+  /** Štart skenovania */
+  async function startScan() {
+    setError(null);
+    setProduct(null);
+    setEvaluation(null);
+    setNotes([]);
+    setScanning(true);
+    lastCodeRef.current = null;
+
+    try {
+      readerRef.current = new BrowserMultiFormatReader();
+      // získaj zoznam kamier
+      const devices = await BrowserMultiFormatReader.listVideoInputDevices();
+      let deviceId: string | undefined;
+
+      if (devices.length) {
+        // vyber zadnú ak vieme
+        const back = devices.find((d) =>
+          /back|rear|environment/i.test(d.label)
+        );
+        deviceId = (useBackCam ? back?.deviceId : devices[0]?.deviceId) || devices[0]?.deviceId;
       }
-    })();
-  }, [scanning]);
 
-  useEffect(() => {
-    if (!scanning || !deviceId || !videoRef.current) return;
-    gotOneRef.current = false;
-    const reader = new BrowserMultiFormatReader();
-    readerRef.current = reader;
-
-    reader.decodeFromVideoDevice(deviceId, videoRef.current, (result) => {
-      if (!result || gotOneRef.current) return;
-      gotOneRef.current = true;
-      const code = result.getText();
-      setBarcode(code);
-      setScanning(false);
-      stopReader();
-      fetchProduct(code);
-    }).catch(() => {
-      setError("Nepodarilo sa spustiť dekódovanie videa.");
-      setScanning(false);
-      stopReader();
-    });
-
-    return () => stopReader();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scanning, deviceId]);
-
-  function stopReader() {
-    try { readerRef.current?.reset(); } catch {}
-    const v = videoRef.current;
-    if (v?.srcObject) {
-      (v.srcObject as MediaStream).getTracks().forEach(t => t.stop());
-      v.srcObject = null;
-    }
-  }
-  function switchCamera() {
-    if (!devices.length) return;
-    const idx = Math.max(0, devices.findIndex(d => d.deviceId === deviceId));
-    const next = devices[(idx + 1) % devices.length];
-    setDeviceId(next.deviceId);
-  }
-
-  // ---------- CZ/SK/OFF lookup chain ----------
-  async function fetchOFFChain(code: string) {
-    const endpoints = [
-      `https://sk.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json`,
-      `https://cz.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json`,
-      `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json`
-    ];
-    for (const url of endpoints) {
-      try {
-        const r = await fetch(url);
-        if (r.ok) {
-          const j = await r.json();
-          if (j.status === 1 && j.product) return j;
+      await readerRef.current.decodeFromVideoDevice(
+        deviceId,
+        videoRef.current!,
+        (result, err, controls) => {
+          if (result) {
+            const code = result.getText();
+            if (code && code !== lastCodeRef.current) {
+              lastCodeRef.current = code;
+              setBarcode(code);
+              // zastav hneď kameru (žiadne blikanie)
+              controls.stop();
+              stopCamera();
+              setScanning(false);
+              fetchProduct(code);
+            }
+          }
         }
-      } catch {}
+      );
+    } catch (e: any) {
+      console.error(e);
+      setError("Nepodarilo sa spustiť kameru.");
+      setScanning(false);
+      stopCamera();
     }
-    throw new Error("Produkt sa nenašiel v SK/CZ/World databáze.");
   }
 
-  // ---------- data ----------
+  /** Prepnúť kameru, ak práve neskenujem */
+  function toggleCamera() {
+    if (scanning) return;
+    setUseBackCam((v) => !v);
+  }
+
+  /** Čistenie kamery pri unmount */
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, []);
+
+  /** Fetch + vyhodnotenie */
   async function fetchProduct(code: string) {
-    if (!code) return;
     setLoading(true);
     setError(null);
     setProduct(null);
-    setStatus(null);
+    setEvaluation(null);
     setNotes([]);
 
     try {
-      const off = await fetchOFFChain(code);
-      const p = off.product;
-      setProduct(p);
+      const url = `https://world.openfoodfacts.org/api/v2/product/${code}.json`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Chyba pripojenia k databáze");
+      const data = await res.json();
 
-      const base = evaluateForProfile(p, profile);
-      setStatus(base.status);
-      setNotes(base.notes);
-
-      // AI fallback pri 'maybe' alebo ak chýbajú ingrediencie
-      if (base.status === "maybe" || !(p.ingredients_text || p.ingredients_text_sk || p.ingredients_text_cs || p.ingredients_text_en)) {
-        const ai = await evaluateWithAI({
-          code,
-          name: p.product_name || p.generic_name || "",
-          ingredients: p.ingredients_text_sk || p.ingredients_text_cs || p.ingredients_text_en || p.ingredients_text || "",
-          allergens: (p.allergens_hierarchy || []).join(", "),
-          lang: "sk",
-          intolerances: profile?.intolerances || []
-        });
-        if (ai.status) setStatus(ai.status);
-        if (ai.notes?.length) setNotes(n => [...n, ...ai.notes!]);
+      if (data.status !== 1 || !data.product) {
+        // nepoznáme – skús AI fallback
+        await fallbackAI({ code, name: "", ingredients: "", allergens: "" });
+        return;
       }
 
-      setHistory(h => [
-        { code, brand: p.brands || "", name: p.product_name || p.generic_name || "Neznámy produkt", status: base.status, ts: Date.now() },
-        ...h.filter((x: any) => x.code !== code)
+      const p = data.product;
+      setProduct(p);
+
+      // Vyhodnotenie podľa profilu
+      const result = evaluateForProfile(p, profile);
+      setEvaluation(result.status);
+      setNotes(result.notes);
+
+      setHistory((h) => [
+        {
+          code,
+          brand: p.brands || "",
+          name: p.product_name || p.generic_name || "Neznámy produkt",
+          status: result.status,
+          ts: Date.now(),
+        },
+        ...h.filter((x) => x.code !== code),
       ]);
     } catch (e: any) {
+      console.error(e);
       setError(e?.message || "Neznáma chyba");
     } finally {
       setLoading(false);
     }
   }
 
-  function evaluateForProfile(p: any, prof: Profile | null): { status: EvalStatus; notes: string[] } {
-    const notes: string[] = [];
-    const tags: string[] = p.allergens_tags || [];
-    const textRaw = (p.ingredients_text_sk || p.ingredients_text_cs || p.ingredients_text_en || p.ingredients_text || "");
-    const txt = textRaw.toLowerCase();
-
-    // If no profile, fall back to gluten + milk_protein
-    const active = prof?.intolerances?.length ? prof.intolerances : (["gluten", "milk_protein"] as IntoleranceKey[]);
-
-    let st: EvalStatus = "maybe";
-
-    for (const key of active) {
-      const spec = INTOLERANCES[key];
-      const hitTag = tags.some(t => new RegExp(`(^|:)(${spec.sk}|${spec.cs}|${key})$`, "i").test(t));
-      const hitTxt = spec.terms.some(t => txt.includes(t));
-
-      if (hitTag || hitTxt) {
-        st = "avoid";
-        notes.push(`Obsahuje / môže obsahovať: ${spec.sk}.`);
-      }
-    }
-
-    // Gluten-free claims for gluten
-    const claims = `${p.labels || ""} ${p.traces || ""} ${(p.traces_tags || []).join(" ")}`.toLowerCase();
-    const saysGF = /gluten[- ]?free|bez lepku|bezlepkov/i.test(claims);
-    if (active.includes("gluten") && saysGF && st !== "avoid") {
-      st = "safe";
-      notes.push("Deklarované ako bezlepkové.");
-    }
-
-    if (st === "maybe") {
-      notes.push("Nenašli sa jasné rizikové alergény podľa profilu. Skontroluj etiketu.");
-    }
-
-    // traces
-    const traces = (p.traces || (p.traces_tags || []).join(", ") || "").toLowerCase();
-    for (const key of active) {
-      const spec = INTOLERANCES[key];
-      if (spec.terms.some(t => traces.includes(t))) {
-        notes.push(`Upozornenie: stopy ${spec.sk}.`);
-        if (st === "safe") st = "maybe";
-      }
-    }
-
-    return { status: st, notes };
-  }
-
-  async function evaluateWithAI(payload: { code: string; name: string; ingredients: string; allergens: string; lang: "sk" | "cs"; intolerances: IntoleranceKey[]; }): Promise<{ status?: EvalStatus; notes?: string[] }> {
+  /** AI fallback – keď OFF nepozná, alebo vyjde “neisté” */
+  async function fallbackAI(input: {
+    code: string;
+    name: string;
+    ingredients: string;
+    allergens: string;
+  }) {
     try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 15000);
-      const res = await fetch("/api/eval", {
+      const resp = await fetch(eval_url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: ctrl.signal
+        body: JSON.stringify({
+          ...input,
+          lang: "sk",
+          profile,
+        }),
       });
-      clearTimeout(t);
 
-      if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        return { status: undefined, notes: [`AI doplnenie nie je dostupné (${res.status}).`, ...(txt ? [txt] : [])] };
+      if (!resp.ok) throw new Error("AI endpoint neodpovedá.");
+      const body = await resp.json();
+
+      if (body?.ok) {
+        setEvaluation(body.status as EvalStatus);
+        if (Array.isArray(body.notes)) setNotes(body.notes);
+      } else {
+        setEvaluation("maybe");
+        setNotes((n) => [...n, "AI sa nepodarilo zavolať alebo odpovedať."]);
       }
-      const data: AiReply = await res.json().catch(() => ({ ok: false } as AiReply));
-      if (!data.ok) return { status: undefined, notes: ["AI odpoveď nebola v poriadku. Použité boli len dáta z OFF."] };
-      return { status: data.status, notes: data.notes };
-    } catch {
-      return { status: undefined, notes: ["AI nie je dostupná (sieť/kvóta). Rozhodnutie je len podľa OFF."] };
+    } catch (e: any) {
+      console.error("AI error:", e);
+      setEvaluation("maybe");
+      setNotes((n) => [...n, "AI požiadavka zlyhala."]);
     }
   }
 
-  // ---------- UI helpers ----------
-  const card: React.CSSProperties = { background:"#FFFFFF", border:"1px solid rgba(0,0,0,0.06)", borderRadius:16, padding:12, boxShadow:"0 1px 3px rgba(0,0,0,0.06)" };
-  const pill = (bg:string, color:string) => ({ display:"inline-block", padding:"4px 10px", borderRadius:999, fontSize:12, fontWeight:700 as const, background:bg, color, border:"1px solid rgba(0,0,0,0.06)" });
-  const statusPill = (s:EvalStatus|null) =>
-    s==="safe"  ? <span style={pill("#E8F8EE","#0A5A2A")}>Bezpečné</span> :
-    s==="avoid" ? <span style={pill("#FDE7E7","#7E1111")}>Vyhnúť sa</span> :
-    s==="maybe" ? <span style={pill("#FFF0C7","#7A5200")}>Neisté</span> :
-                  <span style={pill("#F3F4F6","#374151")}>Zatiaľ nič</span>;
+  /** Heuristika podľa profilu */
+  function evaluateForProfile(p: any, prof: Profile): {
+    status: EvalStatus;
+    notes: string[];
+  } {
+    const ns: string[] = [];
 
-  function clearHistory(){ setHistory([]); localStorage.removeItem("radka_scan_history"); }
+    const allergenTags: string[] = p.allergens_tags || [];
+    const ingrAnalysis: string[] = p.ingredients_analysis_tags || [];
 
-  function toggleIntol(key: IntoleranceKey) {
-    setProfile(prev => {
-      const cur: Profile = prev || { name: nameDraft || "", intolerances: [] };
-      const exists = cur.intolerances.includes(key);
-      const next = { ...cur, intolerances: exists ? cur.intolerances.filter(k => k !== key) : [...cur.intolerances, key] };
-      saveProfile(next);
-      return next;
+    const ingredientsText = (
+      p.ingredients_text_sk ||
+      p.ingredients_text_cs ||
+      p.ingredients_text ||
+      ""
+    ).toLowerCase();
+
+    // slovník
+    const dict = {
+      gluten: ["lepok", "pšen", "psen", "wheat", "jačme", "jacme", "barley", "raž", "raz", "rye", "špal", "spelt", "ovos"],
+      milk: ["mlie", "srvát", "whey", "casein", "kaze", "maslo", "smot", "syr", "tvaroh"],
+      soy: ["sója", "soja", "soy"],
+      nuts: ["orech", "nut", "mandle", "liesk", "vlaš", "kešu", "araš", "peanut", "almond", "hazelnut", "walnut", "cashew"],
+      eggs: ["vajc", "egg", "album", "ovalb"],
+      sesame: ["sezam", "sesame"],
+    } as Record<keyof Intolerances, string[]>;
+
+    // helper – kontrola v texte alebo v tagoch
+    function hasRisk(key: keyof Intolerances) {
+      const t = dict[key];
+      const textHit = t.some((frag) => ingredientsText.includes(frag));
+      const tagHit = allergenTags.some((a) => a.toLowerCase().includes(key));
+      const analysisMaybe =
+        key === "gluten"
+          ? ingrAnalysis.some((x) => /may-contain-gluten/i.test(x))
+          : false;
+      return { textHit, tagHit, analysisMaybe };
+    }
+
+    let status: EvalStatus = "maybe";
+
+    (Object.keys(prof.intolerances) as (keyof Intolerances)[]).forEach((k) => {
+      if (!prof.intolerances[k]) return;
+      const r = hasRisk(k);
+      if (r.tagHit || r.textHit) {
+        status = "avoid";
+        ns.push(
+          `Obsahuje alebo môže obsahovať zložku podľa profilu: ${labelFor(k)}.`
+        );
+      } else if (r.analysisMaybe) {
+        status = status === "avoid" ? "avoid" : "maybe";
+        ns.push("Upozornenie: môže obsahovať stopy lepku.");
+      }
     });
+
+    if (status !== "avoid") {
+      // z OFF claims
+      const claims = `${p.labels || ""} ${p.traces || ""} ${(p.traces_tags || []).join(" ")}`.toLowerCase();
+      const saysGF = /gluten[- ]?free|bez lepku|bezlepkov/i.test(claims);
+
+      if (saysGF && prof.intolerances.gluten) {
+        status = "safe";
+        ns.push("Deklarované ako bezlepkové.");
+      } else {
+        ns.push(
+          "Nenašli sa jasné riziká podľa profilu. Ak si nie si istý/istá, skontroluj etiketu."
+        );
+        if (status !== "safe") status = "maybe";
+      }
+    }
+
+    return { status, notes: ns };
   }
 
-  function completeProfile() {
-    const name = (nameDraft || "").trim() || "Ja";
-    const next: Profile = { name, intolerances: profile?.intolerances?.length ? profile.intolerances : ["gluten","milk_protein"] };
-    setProfile(next);
-    saveProfile(next);
+  function labelFor(k: keyof Intolerances) {
+    const m: Record<keyof Intolerances, string> = {
+      gluten: "lepok",
+      milk: "mlieko",
+      soy: "sója",
+      nuts: "orechy",
+      eggs: "vajcia",
+      sesame: "sezam",
+    };
+    return m[k];
   }
 
-  // ---------- render ----------
-  return (
-    <div style={{ minHeight:"100vh", background:"#F6F7FB", color:"#111827", padding:16 }}>
-      <div style={{ maxWidth:900, margin:"0 auto" }}>
-        {/* header */}
-        <div style={{ ...card, background:"linear-gradient(135deg, rgba(2,132,199,0.10), rgba(109,40,217,0.12))", borderRadius:20, marginBottom:16 }}>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap" }}>
-            <div>
-              <h1 style={{ margin:0, fontSize:28, fontWeight:800, color:"#1F2937" }}>Radka Scanner+</h1>
-              <div style={{ fontSize:13, color:"#334155" }}>Profilové vyhodnocovanie pre SK/CZ + AI fallback</div>
-            </div>
-            <div style={{ display:"flex", gap:8 }}>
-              <button onClick={() => setProfile(null)} style={{ padding:"10px 14px", borderRadius:12, border:"1px solid rgba(0,0,0,0.1)", background:"#fff", fontWeight:600 }}>
-                Zmeniť profil
-              </button>
-              <button onClick={switchCamera} disabled={!devices.length}
-                style={{ padding:"10px 14px", borderRadius:12, border:"1px solid rgba(0,0,0,0.1)", background:"#fff", fontWeight:600 }}>
-                Prepnúť kameru
-              </button>
-              <label style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 12px", borderRadius:12, border:"1px solid rgba(0,0,0,0.1)", background:"#fff", fontWeight:600 }}>
-                <input type="checkbox" checked={scanning} onChange={e=>{ setError(null); setProduct(null); setStatus(null); setNotes([]); setScanning(e.target.checked); }} />
-                Kamera
-              </label>
+  /** UI helpers */
+  function ProfileCard() {
+    return (
+      <div style={card}>
+        <div style={cardHead}>
+          <div style={cardTitle}>Môj profil</div>
+        </div>
+        <div style={{ display: "grid", gap: 10 }}>
+          <div>
+            <label style={label}>Meno</label>
+            <input
+              value={profile.name}
+              onChange={(e) =>
+                setProfile((p) => ({ ...p, name: e.target.value }))
+              }
+              style={input}
+              placeholder="napr. Radka"
+            />
+          </div>
+          <div>
+            <div style={label}>Intolerancie / alergie</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {(Object.keys(profile.intolerances) as (keyof Intolerances)[]).map(
+                (k) => (
+                  <button
+                    key={k}
+                    onClick={() =>
+                      setProfile((p) => ({
+                        ...p,
+                        intolerances: {
+                          ...p.intolerances,
+                          [k]: !p.intolerances[k],
+                        },
+                      }))
+                    }
+                    style={{
+                      ...chip,
+                      background: profile.intolerances[k] ? "#eef2ff" : "#f8fafc",
+                      borderColor: profile.intolerances[k] ? "#c7d2fe" : "#e5e7eb",
+                      color: profile.intolerances[k] ? "#4338ca" : "#111827",
+                    }}
+                  >
+                    {labelFor(k)}
+                  </button>
+                )
+              )}
             </div>
           </div>
         </div>
+      </div>
+    );
+  }
 
-        {/* onboarding/profile */}
-        {!profile && (
-          <div style={{ ...card, marginBottom:16 }}>
-            <div style={{ fontWeight:800, fontSize:18, marginBottom:10 }}>Tvoj profil</div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr", gap:8, marginBottom:12 }}>
-              <label style={{ fontSize:14 }}>
-                Meno (voliteľné):
-                <input value={nameDraft} onChange={e=>setNameDraft(e.target.value)} placeholder="napr. Radka"
-                  style={{ display:"block", width:"100%", marginTop:6, padding:"10px 12px", borderRadius:12, border:"1px solid rgba(0,0,0,0.12)" }} />
-              </label>
-            </div>
-            <div style={{ fontWeight:700, marginBottom:6 }}>Označ intolerancie/alergény</div>
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:8 }}>
-              {Object.keys(INTOLERANCES).map((k) => {
-                const key = k as IntoleranceKey;
-                const spec = INTOLERANCES[key];
-                const active = profile?.intolerances?.includes(key) || false;
-                return (
-                  <button key={key} onClick={()=>toggleIntol(key)}
-                    style={{ textAlign:"left", padding:10, borderRadius:12, border:"1px solid rgba(0,0,0,0.12)", background: active ? "#E8F2FF" : "#fff", fontWeight:600 }}>
-                    {spec.sk}
-                  </button>
-                );
-              })}
-            </div>
-            <div style={{ marginTop:12, display:"flex", gap:8 }}>
-              <button onClick={completeProfile} style={{ padding:"12px 16px", borderRadius:12, border:"1px solid rgba(109,40,217,0.25)", background:"linear-gradient(135deg,#7C3AED,#6D28D9)", color:"#fff", fontWeight:700 }}>Pokračovať</button>
-              <button onClick={()=>{ setProfile({ name: (nameDraft||"Ja"), intolerances: ["gluten","milk_protein"] }); saveProfile({ name: (nameDraft||"Ja"), intolerances: ["gluten","milk_protein"] }); }} style={{ padding:"12px 16px", borderRadius:12, border:"1px solid rgba(0,0,0,0.12)", background:"#fff", fontWeight:700 }}>Len bezlepkové + bez mlieka</button>
-            </div>
-          </div>
-        )}
-
-        {/* scan */}
-        {profile && (
-          <div style={{ ...card, marginBottom:16 }}>
-            <div style={{ fontWeight:700, fontSize:18, marginBottom:10 }}>Skenovanie čiarového kódu</div>
-
-            {scanning && (
-              <div style={{ borderRadius:12, overflow:"hidden", border:"1px solid rgba(0,0,0,0.1)", background:"#000", aspectRatio:"16/9", marginBottom:10 }}>
-                <video ref={videoRef} style={{ width:"100%", height:"100%", objectFit:"cover" }} muted playsInline autoPlay />
-              </div>
-            )}
-
-            {error && (
-              <div style={{ padding:10, borderRadius:10, border:"1px solid #FCA5A5", background:"#FEE2E2", color:"#7F1D1D", marginBottom:10 }}>
-                {error}
-              </div>
-            )}
-
-            <div style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:8 }}>
+  function ScannerCard() {
+    return (
+      <div style={card}>
+        <div style={{ ...cardHead, alignItems: "center" }}>
+          <div style={cardTitle}>Skenovanie čiarového kódu</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={toggleCamera} style={btnGhost}>
+              Prepnúť kameru
+            </button>
+            <label style={{ ...label, display: "flex", alignItems: "center", gap: 8, margin: 0 }}>
               <input
-                placeholder="Zadaj EAN/UPC kód"
-                value={barcode}
-                onChange={e=>setBarcode(e.target.value)}
-                onKeyDown={e=>{ if (e.key==="Enter" && barcode) fetchProduct(barcode); }}
-                style={{ padding:"12px 12px", border:"1px solid rgba(0,0,0,0.12)", borderRadius:12, fontSize:16 }}
+                type="checkbox"
+                checked={scanning}
+                onChange={(e) => (e.target.checked ? startScan() : (stopCamera(), setScanning(false)))}
               />
-              <button onClick={()=> barcode && fetchProduct(barcode)} disabled={!barcode || loading}
-                style={{ padding:"12px 16px", borderRadius:12, border:"1px solid rgba(109,40,217,0.25)", background:loading ? "linear-gradient(135deg,#E5E7EB,#F3F4F6)" : "linear-gradient(135deg,#7C3AED,#6D28D9)", color:loading ? "#111827" : "#fff", fontWeight:700, boxShadow:"0 6px 20px rgba(109,40,217,0.25)" }}>
-                {loading ? "Načítavam…" : "Vyhľadať"}
-              </button>
-            </div>
+              Kamera
+            </label>
+          </div>
+        </div>
 
-            <div style={{ fontSize:12, color:"#6B7280", marginTop:8 }}>
-              Najprv SK/CZ databázy, potom svet. Pri nejasnostiach doplní AI podľa tvojho profilu.
-            </div>
+        {scanning && (
+          <div
+            style={{
+              borderRadius: 14,
+              overflow: "hidden",
+              border: "1px solid #e5e7eb",
+              background: "#000",
+              aspectRatio: "16/9",
+              marginBottom: 12,
+            }}
+          >
+            <video
+              ref={videoRef}
+              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              muted
+              playsInline
+            />
           </div>
         )}
 
-        {/* product */}
-        {product && (
-          <div style={{ ...card, marginBottom:16 }}>
-            <div style={{ display:"flex", justifyContent:"space-between", gap:10, alignItems:"center", flexWrap:"wrap" }}>
-              <div style={{ fontWeight:800, fontSize:18 }}>{product.product_name || product.generic_name || "Neznámy produkt"}</div>
-              <div>{statusPill(status)}</div>
-            </div>
-            <div style={{ fontSize:13, color:"#6B7280", marginTop:2 }}>Kód: {product.code}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
+          <input
+            placeholder="Zadaj EAN/UPC kód"
+            value={barcode}
+            onChange={(e) => setBarcode(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && barcode) fetchProduct(barcode);
+            }}
+            style={input}
+          />
+          <button
+            onClick={() => barcode && fetchProduct(barcode)}
+            disabled={!barcode || loading}
+            style={btnPrimary}
+          >
+            {loading ? "Načítavam…" : "Vyhľadať"}
+          </button>
+        </div>
+        <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
+          Dáta: Open Food Facts → ak je neisté, doplní AI z tvojho endpointu.
+        </div>
+      </div>
+    );
+  }
 
-            {notes.length>0 && (
-              <ul style={{ marginLeft:18, lineHeight:1.5, marginTop:8 }}>
-                {notes.map((n,i)=>(<li key={i} style={{ fontSize:14 }}>{n}</li>))}
+  function ProductCard() {
+    if (!product && !evaluation && !notes.length && !error) return null;
+
+    return (
+      <div style={card}>
+        {error && (
+          <div style={alertErr}>{error}</div>
+        )}
+
+        {product && (
+          <div style={{ display: "grid", gap: 10 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 10,
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={{ ...cardTitle, margin: 0 }}>
+                {product.product_name || product.generic_name || "Neznámy produkt"}
+              </div>
+              {evaluation && statusPill(evaluation)}
+            </div>
+
+            <div style={{ fontSize: 13, color: "#64748b" }}>Kód: {product.code}</div>
+
+            {notes.length > 0 && (
+              <ul style={{ marginLeft: 18, lineHeight: 1.45 }}>
+                {notes.map((n, i) => (
+                  <li key={i} style={{ fontSize: 14 }}>
+                    {n}
+                  </li>
+                ))}
               </ul>
             )}
 
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <div>
-                <div style={{ fontWeight:700, marginBottom:4 }}>Alergény (z databázy)</div>
-                <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-                  {(product.allergens_hierarchy || []).length
-                    ? (product.allergens_hierarchy || []).map((t:string)=>(
-                        <span key={t} style={{ fontSize:12, background:"#F3F4F6", padding:"4px 8px", borderRadius:999, border:"1px solid rgba(0,0,0,0.08)" }}>
-                          {t.replace(/^.*:/,"")}
-                        </span>
-                      ))
-                    : <span style={{ fontSize:13, color:"#6B7280" }}>Neuvádzané</span>}
+                <div style={subTitle}>Alergény (z databázy)</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {(product.allergens_hierarchy || []).length ? (
+                    (product.allergens_hierarchy || []).map((t: string) => (
+                      <Tag key={t}>{t.replace(/^.*:/, "")}</Tag>
+                    ))
+                  ) : (
+                    <span style={{ fontSize: 13, color: "#64748b" }}>Neuvádzané</span>
+                  )}
                 </div>
               </div>
               <div>
-                <div style={{ fontWeight:700, marginBottom:4 }}>Ingrediencie (sk/cs/en)</div>
-                <div style={{ fontSize:13, maxHeight:140, overflow:"auto", padding:8, borderRadius:10, background:"#F9FAFB", border:"1px solid rgba(0,0,0,0.08)" }}>
-                  {product.ingredients_text_sk || product.ingredients_text_cs || product.ingredients_text_en || product.ingredients_text || "Neuvádzané"}
+                <div style={subTitle}>Ingrediencie (sk/cs/en)</div>
+                <div style={ingredientsBox}>
+                  {product.ingredients_text_sk ||
+                    product.ingredients_text_cs ||
+                    product.ingredients_text_en ||
+                    product.ingredients_text ||
+                    "Neuvádzané"}
                 </div>
               </div>
             </div>
 
-            <div style={{ fontSize:12, color:"#6B7280", marginTop:8 }}>
-              Zdroj: Open Food Facts (SK/CZ/World) • Posledná aktualizácia: {product.last_modified_t ? new Date(product.last_modified_t*1000).toLocaleDateString() : "neuvedené"}
+            <div style={{ fontSize: 12, color: "#64748b" }}>
+              Zdroj: Open Food Facts • Posledná aktualizácia:{" "}
+              {product.last_modified_t
+                ? new Date(product.last_modified_t * 1000).toLocaleDateString()
+                : "neuvedené"}
             </div>
           </div>
         )}
+      </div>
+    );
+  }
 
-        {/* history */}
-        <div style={{ ...card, marginBottom:24 }}>
-          <div style={{ fontWeight:800, fontSize:18 }}>Posledné skeny</div>
-          {history.length===0 ? (
-            <div style={{ fontSize:13, color:"#6B7280", marginTop:6 }}>Zatiaľ prázdne</div>
-          ) : (
-            <div style={{ display:"flex", flexDirection:"column", gap:8, marginTop:8 }}>
-              {history.map((h:any)=>(
-                <button key={h.code} onClick={()=>fetchProduct(h.code)}
-                  style={{ textAlign:"left", border:"1px solid rgba(0,0,0,0.06)", borderRadius:12, padding:10, background:"#fff", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                  <div>
-                    <div style={{ fontWeight:700 }}>{h.name}</div>
-                    <div style={{ fontSize:12, color:"#6B7280" }}>{h.brand} • {h.code}</div>
-                  </div>
-                  <div style={{ fontSize:12, padding:"4px 8px", borderRadius:999, border:"1px solid rgba(0,0,0,0.06)",
-                    background: h.status==="safe" ? "#E8F8EE" : h.status==="avoid" ? "#FDE7E7" : "#FFF0C7",
-                    color:      h.status==="safe" ? "#0A5A2A" : h.status==="avoid" ? "#7E1111" : "#7A5200",
-                    fontWeight:700 }}>
-                    {h.status==="safe" ? "Bezpečné" : h.status==="avoid" ? "Vyhnúť sa" : "Neisté"}
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-          <div style={{ marginTop:10, display:"flex", gap:8 }}>
-            <button onClick={clearHistory} style={{ padding:"8px 12px", borderRadius:10, border:"1px solid rgba(0,0,0,0.12)", background:"#fff", fontWeight:600 }}>
+  function HistoryCard() {
+    return (
+      <div style={card}>
+        <div style={{ ...cardHead, alignItems: "center" }}>
+          <div style={cardTitle}>Posledné skeny</div>
+          {history.length > 0 && (
+            <button
+              onClick={() => {
+                setHistory([]);
+                localStorage.removeItem("radka_history");
+              }}
+              style={btnGhost}
+            >
               Vymazať históriu
             </button>
-            <button onClick={()=>{ saveProfile(null); setProfile(null); }} style={{ padding:"8px 12px", borderRadius:10, border:"1px solid rgba(0,0,0,0.12)", background:"#fff", fontWeight:600 }}>
-              Vymazať profil
-            </button>
-          </div>
+          )}
         </div>
 
-        <div style={{ textAlign:"center", fontSize:12, color:"#6B7280", paddingBottom:24 }}>
+        {history.length === 0 ? (
+          <div style={{ fontSize: 13, color: "#64748b" }}>Zatiaľ prázdne</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+            {history.map((h) => (
+              <button
+                key={h.code}
+                onClick={() => fetchProduct(h.code)}
+                style={historyRow}
+              >
+                <div>
+                  <div style={{ fontWeight: 600 }}>{h.name}</div>
+                  <div style={{ fontSize: 12, color: "#64748b" }}>
+                    {h.brand} • {h.code}
+                  </div>
+                </div>
+                <div>{statusPill(h.status)}</div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#f6f7fb" }}>
+      <div style={hero}>
+        <div style={{ fontSize: 24, fontWeight: 700 }}>Radka Scanner+</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={toggleCamera} style={btnWhite}>
+            Prepnúť kameru
+          </button>
+          <label style={{ ...label, display: "flex", alignItems: "center", gap: 8, margin: 0, color: "#0f172a" }}>
+            <input
+              type="checkbox"
+              checked={scanning}
+              onChange={(e) => (e.target.checked ? startScan() : (stopCamera(), setScanning(false)))}
+            />
+            Kamera
+          </label>
+        </div>
+      </div>
+
+      <div style={container}>
+        <ScannerCard />
+        <ProfileCard />
+        <ProductCard />
+        <HistoryCard />
+
+        <div style={{ textAlign: "center", fontSize: 12, color: "#64748b", padding: "14px 0" }}>
           Toto je pomocný nástroj. Pri nejasnostiach vždy skontroluj etiketu výrobku.
         </div>
       </div>
     </div>
   );
 }
+
+/** ====== “Dizajn systém” (inline) ====== */
+const container: React.CSSProperties = {
+  maxWidth: 880,
+  margin: "0 auto",
+  padding: 16,
+  display: "grid",
+  gap: 12,
+};
+
+const hero: React.CSSProperties = {
+  background: "linear-gradient(135deg, #eef2ff 0%, #e9d5ff 100%)",
+  padding: "18px 16px",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  color: "#0f172a",
+};
+
+const card: React.CSSProperties = {
+  background: "#fff",
+  border: "1px solid #e5e7eb",
+  borderRadius: 16,
+  padding: 14,
+  boxShadow: "0 1px 0 rgba(16,24,40,.04)",
+};
+
+const cardHead: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  marginBottom: 10,
+};
+
+const cardTitle: React.CSSProperties = {
+  fontWeight: 700,
+  fontSize: 18,
+  color: "#0f172a",
+};
+
+const label: React.CSSProperties = {
+  fontSize: 13,
+  color: "#475569",
+  marginBottom: 6,
+  display: "block",
+};
+
+const input: React.CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: "1px solid #e5e7eb",
+  outline: "none",
+  background: "#fff",
+  fontSize: 14,
+};
+
+const btnPrimary: React.CSSProperties = {
+  padding: "10px 14px",
+  borderRadius: 10,
+  border: "1px solid #7c3aed",
+  background: "linear-gradient(135deg, #7c3aed, #5b21b6)",
+  color: "#fff",
+  fontWeight: 600,
+};
+
+const btnGhost: React.CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 10,
+  border: "1px solid #e5e7eb",
+  background: "#fff",
+  color: "#0f172a",
+  fontWeight: 500,
+};
+
+const btnWhite: React.CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 10,
+  border: "1px solid #e5e7eb",
+  background: "#fff",
+  color: "#0f172a",
+  fontWeight: 600,
+};
+
+const chip: React.CSSProperties = {
+  padding: "6px 10px",
+  borderRadius: 999,
+  border: "1px solid",
+  fontSize: 13,
+};
+
+const subTitle: React.CSSProperties = {
+  fontWeight: 600,
+  marginBottom: 6,
+  color: "#0f172a",
+};
+
+const ingredientsBox: React.CSSProperties = {
+  fontSize: 13,
+  maxHeight: 120,
+  overflow: "auto",
+  padding: 10,
+  borderRadius: 10,
+  background: "#f8fafc",
+  border: "1px solid #e5e7eb",
+};
+
+const historyRow: React.CSSProperties = {
+  textAlign: "left" as const,
+  border: "1px solid #e5e7eb",
+  borderRadius: 12,
+  padding: 10,
+  background: "#fff",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+};
+
+const alertErr: React.CSSProperties = {
+  padding: 10,
+  borderRadius: 10,
+  border: "1px solid #fecaca",
+  background: "#fee2e2",
+  color: "#991b1b",
+  marginBottom: 12,
+};
