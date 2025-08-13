@@ -1,4 +1,4 @@
-name: Android APK (Debug)
+name: Android APK
 
 on:
   push:
@@ -6,8 +6,14 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-android:
+  build-apk:
     runs-on: ubuntu-latest
+
+    env:
+      # uprav podľa potreby
+      NODE_VERSION: '18.x'
+      CAP_CLI_VERSION: '5'         # používame Capacitor v5
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
 
     steps:
       - name: Checkout
@@ -16,46 +22,92 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
 
-      - name: Install NPM deps
-        run: npm ci || npm install
+      - name: Install deps
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci || npm ci --legacy-peer-deps || npm i --legacy-peer-deps
+          else
+            npm i --legacy-peer-deps
+          fi
 
-      # Postav web (Vite) -> výstup do dist/
       - name: Build web
-        run: npm run build
+        run: |
+          npm run build
 
-      # Sync webu do natívnych platforiem (Capacitor)
-      - name: Sync Capacitor (android)
-        run: npx cap sync android
+      # ----- Capacitor: Android platform & sync -----
+      - name: Ensure Android platform exists
+        run: |
+          if [ ! -d "android" ]; then
+            npx --yes @capacitor/cli@${{ env.CAP_CLI_VERSION }} cap add android
+          fi
 
-      # Java 17 (Gradle/AGP to vyžaduje)
-      - name: Setup Java (JDK 17)
+      - name: Sync Capacitor (Android)
+        run: |
+          npx --yes @capacitor/cli@${{ env.CAP_CLI_VERSION }} cap sync android
+
+      # (voliteľné) doplnenie CAMERA permission (ak už nie je v manifeste)
+      - name: Ensure CAMERA permission in AndroidManifest
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST" ]; then
+            if ! grep -q 'android.permission.CAMERA' "$MANIFEST"; then
+              # vložíme povolenie pred koniec <manifest>
+              sed -i '/<application /i\    <uses-permission android:name="android.permission.CAMERA" />' "$MANIFEST"
+              echo "Added CAMERA permission to AndroidManifest.xml"
+            else
+              echo "CAMERA permission already present"
+            fi
+          fi
+
+      # ----- Java & Android SDK -----
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: 'temurin'
           java-version: '17'
 
-      # Android SDK
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Install Android SDK tools
+        run: |
+          mkdir -p "$ANDROID_SDK_ROOT"
+          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o cmd-tools.zip
+          unzip -q cmd-tools.zip -d "$ANDROID_SDK_ROOT"
+          rm -f cmd-tools.zip
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          mv "$ANDROID_SDK_ROOT/cmdline-tools"/* "$ANDROID_SDK_ROOT/cmdline-tools/latest" || true
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/tools/bin" >> $GITHUB_PATH
 
-      # (voliteľné) Cache Gradlu pre rýchlejšie buildy
+      - name: Install Android packages & accept licenses
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      # ----- Gradle build -----
       - name: Gradle cache
-        uses: gradle/gradle-build-action@v2
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
 
-      # Ak je gradlew v android/
-      - name: Grant Gradle permissions
-        run: chmod +x android/gradlew
-
-      # Build DEBUG APK
-      - name: Build Debug APK
+      - name: Build debug APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
 
-      # Uloženie APK ako artifact
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug.apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
