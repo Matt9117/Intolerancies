@@ -41,49 +41,37 @@ jobs:
       - name: Build web
         run: npm run build
 
-      # --- Capacitor príprava ------------------------------------------------
-
-      - name: Ensure Capacitor deps (@capacitor/core/android/cli)
+      # ---------- Capacitor príprava ----------
+      - name: Ensure Capacitor deps
         run: |
           set -e
-          MISSING=""
-          npm ls @capacitor/core >/dev/null 2>&1 || MISSING="yes"
-          npm ls @capacitor/android >/dev/null 2>&1 || MISSING="yes"
-          npm ls @capacitor/cli >/dev/null 2>&1 || MISSING="yes"
-          if [ -n "$MISSING" ]; then
+          NEED=0
+          npm ls @capacitor/core >/dev/null 2>&1 || NEED=1
+          npm ls @capacitor/android >/dev/null 2>&1 || NEED=1
+          npm ls @capacitor/cli >/dev/null 2>&1 || NEED=1
+          if [ "$NEED" = "1" ]; then
             npm i -D @capacitor/core@${CAP_V} @capacitor/android@${CAP_V} @capacitor/cli@${CAP_V}
           fi
 
       - name: Ensure capacitor.config.json
         run: |
           if [ ! -f "capacitor.config.json" ] && [ ! -f "capacitor.config.ts" ] && [ ! -f "capacitor.config.js" ]; then
-            cat > capacitor.config.json << 'EOF'
-{
-  "appId": "com.matt.intolerancies",
-  "appName": "radka-scanner-plus",
-  "webDir": "dist",
-  "bundledWebRuntime": false,
-  "server": {
-    "androidScheme": "https"
-  },
-  "plugins": {
-    "SplashScreen": {
-      "launchShowDuration": 0
-    }
-  }
-}
-EOF
-            echo "Created capacitor.config.json"
-          else
-            echo "Capacitor config already exists."
+            printf '%s\n' \
+            '{' \
+            '  "appId": "com.matt.intolerancies",' \
+            '  "appName": "radka-scanner-plus",' \
+            '  "webDir": "dist",' \
+            '  "bundledWebRuntime": false,' \
+            '  "server": { "androidScheme": "https" },' \
+            '  "plugins": { "SplashScreen": { "launchShowDuration": 0 } }' \
+            '}' > capacitor.config.json
           fi
+          cat capacitor.config.json
 
       - name: Add Android platform if missing
         run: |
           if [ ! -d "android" ]; then
             npx --yes cap add android --skip-deps
-          else
-            echo "Android platform already present."
           fi
 
       - name: Sync Capacitor (Android)
@@ -93,17 +81,13 @@ EOF
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
-            if ! grep -q 'android.permission.CAMERA' "$MANIFEST"; then
-              # vlož permission pred <application>
+            grep -q 'android.permission.CAMERA' "$MANIFEST" || \
               sed -i '/<application/i\    <uses-permission android:name="android.permission.CAMERA" />' "$MANIFEST"
-            fi
-            if ! grep -q 'android.hardware.camera' "$MANIFEST"; then
+            grep -q 'android.hardware.camera' "$MANIFEST" || \
               sed -i '/<application/i\    <uses-feature android:name="android.hardware.camera" android:required="false" />' "$MANIFEST"
-            fi
           fi
 
-      # --- Java & Android SDK ------------------------------------------------
-
+      # ---------- Java & Android SDK ----------
       - name: Setup Java 17 (Temurin)
         uses: actions/setup-java@v4
         with:
@@ -112,8 +96,6 @@ EOF
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-
-      # --- Build APK ---------------------------------------------------------
 
       - name: Make gradlew executable
         run: chmod +x android/gradlew
