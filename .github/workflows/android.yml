@@ -9,9 +9,6 @@ jobs:
   build-apk:
     runs-on: ubuntu-latest
 
-    env:
-      NODE_VERSION: 18.x
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,7 +16,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: 18
 
       - name: Install deps
         run: |
@@ -29,75 +26,60 @@ jobs:
             npm install --legacy-peer-deps
           fi
 
-      - name: Build web
+      - name: Build web (Vite → dist/)
         run: npm run build
 
-      # Vytvorí capacitor.config.json iba ak chýba
+      # Capacitor balíčky (idempotentne – nainštaluje len ak chýbajú)
+      - name: Ensure Capacitor deps
+        run: |
+          npm ls @capacitor/core >/dev/null 2>&1 || npm i @capacitor/core@5 -E
+          npm ls @capacitor/android >/dev/null 2>&1 || npm i @capacitor/android@5 -E
+          npm ls @capacitor/cli >/dev/null 2>&1 || npm i -D @capacitor/cli@5 -E
+
+      # Vytvor capacitor.config.json, ak chýba (bez heredocu)
       - name: Ensure capacitor.config.json
         shell: bash
         run: |
           if [ ! -f "capacitor.config.json" ] && [ ! -f "capacitor.config.ts" ] && [ ! -f "capacitor.config.js" ]; then
-            cat > capacitor.config.json <<'EOF'
-            {
-              "appId": "com.matt.intolerancies",
-              "appName": "radka-scanner-plus",
-              "webDir": "dist",
-              "bundledWebRuntime": false,
-              "server": { "androidScheme": "https" },
-              "plugins": {
-                "SplashScreen": { "launchShowDuration": 0 }
-              }
-            }
-EOF
-            echo "Created capacitor.config.json"
-          else
-            echo "Capacitor config already exists."
+            printf '{\n' > capacitor.config.json
+            printf '  "appId": "com.matt.intolerancies",\n' >> capacitor.config.json
+            printf '  "appName": "radka-scanner-plus",\n' >> capacitor.config.json
+            printf '  "webDir": "dist",\n' >> capacitor.config.json
+            printf '  "bundledWebRuntime": false,\n' >> capacitor.config.json
+            printf '  "server": { "androidScheme": "https" },\n' >> capacitor.config.json
+            printf '  "plugins": { "SplashScreen": { "launchShowDuration": 0 } }\n' >> capacitor.config.json
+            printf '}\n' >> capacitor.config.json
           fi
+          cat capacitor.config.json
 
       - name: Add Android platform if missing
         shell: bash
         run: |
           if [ ! -d "android" ]; then
             npx --yes @capacitor/cli@5 cap add android
-          else
-            echo "Android platform already present."
           fi
 
       - name: Sync Capacitor (Android)
         run: npx --yes @capacitor/cli@5 cap sync android
 
-      # Doplnenie CAMERA povolenia – idempotentne
+      # (voliteľné) doplnenie povolenia KAMERA do manifestu – bezpečne
       - name: Ensure CAMERA permission
         shell: bash
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
-            if ! grep -q 'android.permission.CAMERA' "$MANIFEST"; then
-              # vloží uses-permission hneď za prvý riadok <manifest ...>
-              awk '{
-                print $0;
-                if ($0 ~ /<manifest/ && !ins) {
-                  print "    <uses-permission android:name=\"android.permission.CAMERA\" />";
-                  ins=1
-                }
-              }' "$MANIFEST" > "$MANIFEST.tmp" && mv "$MANIFEST.tmp" "$MANIFEST"
-              echo "Added CAMERA permission."
-            else
-              echo "CAMERA permission already present."
-            fi
-          else
-            echo "AndroidManifest.xml not found"
-            exit 1
+            grep -q 'android.permission.CAMERA' "$MANIFEST" || \
+              sed -i '/<application/i\    <uses-permission android:name="android.permission.CAMERA" />' "$MANIFEST"
+            grep -q 'android.hardware.camera' "$MANIFEST" || \
+              sed -i '/<application/i\    <uses-feature android:name="android.hardware.camera" android:required="false" />' "$MANIFEST"
           fi
 
-      # Java 17 pre Gradle
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # Android SDK & licencie
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -111,10 +93,11 @@ EOF
 
       - name: Build debug APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
