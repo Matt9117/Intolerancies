@@ -10,9 +10,8 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      NODE_VERSION: '18.x'
-      CAP_CLI_VERSION: '5'
-      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+      NODE_VERSION: 18.x
+      CAP_V: 5
 
     steps:
       - name: Checkout
@@ -22,116 +21,106 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
 
-      - name: Install deps
+      - name: Use npm cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Install dependencies
         run: |
           if [ -f package-lock.json ]; then
-            npm ci || npm ci --legacy-peer-deps || npm i --legacy-peer-deps
+            npm ci
           else
-            npm i --legacy-peer-deps
+            npm install --legacy-peer-deps
           fi
 
-      - name: Build web (Vite -> dist/)
+      - name: Build web
         run: npm run build
 
-      # --- Capacitor deps (bezpecne aj ked su uz nainstalovane) ---
-      - name: Ensure Capacitor deps
-        run: |
-          npm ls @capacitor/core >/dev/null 2>&1 || npm i @capacitor/core@${{ env.CAP_CLI_VERSION }} -E
-          npm ls @capacitor/android >/dev/null 2>&1 || npm i @capacitor/android@${{ env.CAP_CLI_VERSION }} -E
+      # --- Capacitor príprava ------------------------------------------------
 
-      # --- Konfigurácia Capacitor: ak chýba, vytvoríme JSON s webDir=dist ---
+      - name: Ensure Capacitor deps (@capacitor/core/android/cli)
+        run: |
+          set -e
+          MISSING=""
+          npm ls @capacitor/core >/dev/null 2>&1 || MISSING="yes"
+          npm ls @capacitor/android >/dev/null 2>&1 || MISSING="yes"
+          npm ls @capacitor/cli >/dev/null 2>&1 || MISSING="yes"
+          if [ -n "$MISSING" ]; then
+            npm i -D @capacitor/core@${CAP_V} @capacitor/android@${CAP_V} @capacitor/cli@${CAP_V}
+          fi
+
       - name: Ensure capacitor.config.json
         run: |
           if [ ! -f "capacitor.config.json" ] && [ ! -f "capacitor.config.ts" ] && [ ! -f "capacitor.config.js" ]; then
             cat > capacitor.config.json << 'EOF'
-            {
-              "appId": "com.matt.intolerancies",
-              "appName": "radka-scanner-plus",
-              "webDir": "dist",
-              "bundledWebRuntime": false,
-              "server": {
-                "androidScheme": "https"
-              },
-              "plugins": {
-                "SplashScreen": { "launchShowDuration": 0 }
-              }
-            }
-            EOF
+{
+  "appId": "com.matt.intolerancies",
+  "appName": "radka-scanner-plus",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 0
+    }
+  }
+}
+EOF
             echo "Created capacitor.config.json"
           else
             echo "Capacitor config already exists."
           fi
 
-      # --- Pridaj Android platformu, ak chýba ---
       - name: Add Android platform if missing
         run: |
           if [ ! -d "android" ]; then
-            npx --yes @capacitor/cli@${{ env.CAP_CLI_VERSION }} capacitor add android
+            npx --yes cap add android --skip-deps
           else
-            echo "Android platform already exists."
+            echo "Android platform already present."
           fi
 
-      # --- Sync (skopíruje dist/ do Android projektu) ---
-      - name: Capacitor sync (android)
-        run: npx --yes @capacitor/cli@${{ env.CAP_CLI_VERSION }} capacitor sync android
+      - name: Sync Capacitor (Android)
+        run: npx --yes cap sync android
 
-      # (optional) Uisti sa, že CAMERA permission je v manifeste
-      - name: Ensure CAMERA permission in AndroidManifest
+      - name: Patch AndroidManifest (CAMERA permission)
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
             if ! grep -q 'android.permission.CAMERA' "$MANIFEST"; then
-              sed -i '/<application /i\    <uses-permission android:name="android.permission.CAMERA" />' "$MANIFEST"
-              echo "Added CAMERA permission to AndroidManifest.xml"
-            else
-              echo "CAMERA permission already present"
+              # vlož permission pred <application>
+              sed -i '/<application/i\    <uses-permission android:name="android.permission.CAMERA" />' "$MANIFEST"
+            fi
+            if ! grep -q 'android.hardware.camera' "$MANIFEST"; then
+              sed -i '/<application/i\    <uses-feature android:name="android.hardware.camera" android:required="false" />' "$MANIFEST"
             fi
           fi
 
-      # --- Java & Android SDK ---
-      - name: Setup Java 17
+      # --- Java & Android SDK ------------------------------------------------
+
+      - name: Setup Java 17 (Temurin)
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK tools
-        run: |
-          mkdir -p "$ANDROID_SDK_ROOT"
-          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o cmd-tools.zip
-          unzip -q cmd-tools.zip -d "$ANDROID_SDK_ROOT"
-          rm -f cmd-tools.zip
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          mv "$ANDROID_SDK_ROOT/cmdline-tools"/* "$ANDROID_SDK_ROOT/cmdline-tools/latest" || true
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/tools/bin" >> $GITHUB_PATH
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Accept licenses & install packages
-        run: |
-          yes | sdkmanager --licenses
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+      # --- Build APK ---------------------------------------------------------
 
-      # --- Build APK ---
-      - name: Gradle cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
 
       - name: Build debug APK
         working-directory: android
-        run: |
-          chmod +x ./gradlew
-          ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
