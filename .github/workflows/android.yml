@@ -10,9 +10,8 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # uprav podľa potreby
       NODE_VERSION: '18.x'
-      CAP_CLI_VERSION: '5'         # používame Capacitor v5
+      CAP_CLI_VERSION: '5'
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
 
     steps:
@@ -33,34 +32,33 @@ jobs:
             npm i --legacy-peer-deps
           fi
 
-      - name: Build web
+      # Doinštaluj Capacitor balíčky, ak chýbajú (bezpečné opakovane)
+      - name: Ensure Capacitor deps
         run: |
-          npm run build
+          npm ls @capacitor/core >/dev/null 2>&1 || npm i @capacitor/core@${{ env.CAP_CLI_VERSION }} -E
+          npm ls @capacitor/android >/dev/null 2>&1 || npm i @capacitor/android@${{ env.CAP_CLI_VERSION }} -E
 
-      # ----- Capacitor: Android platform & sync -----
-      - name: Ensure Android platform exists
+      # Build webu (aby existoval dist/)
+      - name: Build web
+        run: npm run build
+
+      # Inicializácia Capacitor (ak chýba config)
+      - name: Capacitor init if missing
+        run: |
+          if [ ! -f "capacitor.config.ts" ] && [ ! -f "capacitor.config.json" ] && [ ! -f "capacitor.config.js" ]; then
+            npx --yes @capacitor/cli@${{ env.CAP_CLI_VERSION }} capacitor init radka-scanner-plus com.matt.intolerancies --web-dir=dist --npm-client=npm --yes
+          fi
+
+      # Pridaj Android platformu, ak chýba
+      - name: Add Android platform if missing
         run: |
           if [ ! -d "android" ]; then
-            npx --yes @capacitor/cli@${{ env.CAP_CLI_VERSION }} cap add android
+            npx --yes @capacitor/cli@${{ env.CAP_CLI_VERSION }} capacitor add android
           fi
 
-      - name: Sync Capacitor (Android)
-        run: |
-          npx --yes @capacitor/cli@${{ env.CAP_CLI_VERSION }} cap sync android
-
-      # (voliteľné) doplnenie CAMERA permission (ak už nie je v manifeste)
-      - name: Ensure CAMERA permission in AndroidManifest
-        run: |
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-          if [ -f "$MANIFEST" ]; then
-            if ! grep -q 'android.permission.CAMERA' "$MANIFEST"; then
-              # vložíme povolenie pred koniec <manifest>
-              sed -i '/<application /i\    <uses-permission android:name="android.permission.CAMERA" />' "$MANIFEST"
-              echo "Added CAMERA permission to AndroidManifest.xml"
-            else
-              echo "CAMERA permission already present"
-            fi
-          fi
+      # Sync (skopíruje dist/ do android projektu a upraví configy)
+      - name: Capacitor sync (android)
+        run: npx --yes @capacitor/cli@${{ env.CAP_CLI_VERSION }} capacitor sync android
 
       # ----- Java & Android SDK -----
       - name: Setup Java 17
@@ -83,12 +81,12 @@ jobs:
           echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
           echo "$ANDROID_SDK_ROOT/tools/bin" >> $GITHUB_PATH
 
-      - name: Install Android packages & accept licenses
+      - name: Accept licenses & install packages
         run: |
           yes | sdkmanager --licenses
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      # ----- Gradle build -----
+      # ----- Build APK -----
       - name: Gradle cache
         uses: actions/cache@v4
         with:
