@@ -29,12 +29,18 @@ jobs:
       - name: Build web (Vite → dist/)
         run: npm run build
 
-      # Capacitor balíčky (idempotentne – nainštaluje len ak chýbajú)
+      # Nainštaluj Capacitor balíky, ak chýbajú (idempotentne)
       - name: Ensure Capacitor deps
         run: |
           npm ls @capacitor/core >/dev/null 2>&1 || npm i @capacitor/core@5 -E
           npm ls @capacitor/android >/dev/null 2>&1 || npm i @capacitor/android@5 -E
           npm ls @capacitor/cli >/dev/null 2>&1 || npm i -D @capacitor/cli@5 -E
+
+      # Over, že vieme spustiť CLI (debug)
+      - name: Check Capacitor CLI
+        run: |
+          npx -y -p @capacitor/cli@5 capacitor --version
+          npx -y -p @capacitor/cli@5 capacitor --help >/dev/null
 
       # Vytvor capacitor.config.json, ak chýba (bez heredocu)
       - name: Ensure capacitor.config.json
@@ -56,13 +62,13 @@ jobs:
         shell: bash
         run: |
           if [ ! -d "android" ]; then
-            npx --yes @capacitor/cli@5 cap add android
+            npx -y -p @capacitor/cli@5 capacitor add android
           fi
 
       - name: Sync Capacitor (Android)
-        run: npx --yes @capacitor/cli@5 cap sync android
+        run: npx -y -p @capacitor/cli@5 capacitor sync android
 
-      # (voliteľné) doplnenie povolenia KAMERA do manifestu – bezpečne
+      # (voliteľné) doplnenie KAMERA povolenia do manifestu
       - name: Ensure CAMERA permission
         shell: bash
         run: |
