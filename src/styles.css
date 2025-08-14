@@ -1,179 +1,126 @@
-/* src/styles.css */
-/* ========= THEME TOKENS ========= */
+/* ====== ZÁKLAD ====== */
 :root{
-  --bg: #fafbff;
-  --bg-soft: #f5f6fb;
-  --card: #ffffff;
-  --text: #0e1320;
-  --muted: #6b7280;
-  --brand1: #7c4dff;         /* fialová */
-  --brand2: #4f8cff;         /* modrá */
-  --accent: #8b5cf6;
-  --ring: 0 0 0 3px rgba(124, 77, 255, .15);
-  --shadow: 0 8px 30px rgba(2, 6, 23, .06);
-  --radius: 18px;
+  --bg:#0b1020;
+  --panel:#121935;
+  --panel-2:#0f1630;
+  --ink:#eaf1ff;
+  --ink-dim:#b6c2e2;
+  --brand:#7c5cff;
+  --brand-2:#20e3b2;
+  --ok:#1ad1a5;
+  --warn:#ffd166;
+  --bad:#ff6b6b;
+  --ring: 0 0 0 2px color-mix(in oklch, var(--brand) 35%, transparent);
+  --shadow: 0 10px 30px rgba(0,0,0,.35);
+  --radius: 16px;
 }
 
-/* Globál */
 *{box-sizing:border-box}
 html,body,#root{height:100%}
 body{
   margin:0;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji";
-  color:var(--text);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+  color:var(--ink);
   background:
-    radial-gradient(1300px 700px at -10% -10%, #f2eeff 0%, rgba(242,238,255,0) 60%),
-    radial-gradient(900px 600px at 110% -10%, #e6f0ff 0%, rgba(230,240,255,0) 55%),
+    radial-gradient(1200px 600px at 100% 0%, color-mix(in oklch, var(--brand) 20%, transparent), transparent 60%),
+    radial-gradient(900px 500px at 0% 100%, color-mix(in oklch, var(--brand-2) 16%, transparent), transparent 60%),
     var(--bg);
 }
 
-/* ========= HEADER ========= */
-.header{
-  position:sticky; top:0; z-index:50;
-  background: linear-gradient(135deg, #efeafe 0%, #e9ecff 35%, #e8f0ff 100%);
-  border-bottom:1px solid rgba(2,6,23,.06);
-  padding:18px 16px 14px;
+/* ====== HLAVIČKA ====== */
+.app-header{
+  position:sticky; top:0; z-index:10;
+  background:
+    linear-gradient(135deg, color-mix(in oklch, var(--brand) 25%, transparent), transparent 40%),
+    linear-gradient(315deg, color-mix(in oklch, var(--brand-2) 18%, transparent), transparent 50%),
+    var(--panel-2);
+  border-bottom:1px solid rgba(255,255,255,.06);
+  box-shadow: var(--shadow);
 }
-.header__row{
-  max-width:1024px; margin:0 auto;
-  display:flex; align-items:center; gap:16px; justify-content:space-between;
+.app-header .wrap{
+  max-width:960px; margin:0 auto; padding:18px 16px; display:flex; gap:12px; align-items:center; justify-content:space-between;
 }
 .brand{
-  line-height:1.1;
-  font-weight:800;
+  font-weight:800; letter-spacing:.3px; line-height:1.05;
   font-size:28px;
-  letter-spacing:.2px;
 }
-.brand span{display:block}
-.brand__plus{color:var(--accent)}
-/* Kompaktný toggle kamery */
-.cam-toggle{
-  display:flex; align-items:center; gap:10px;
-  background:var(--card);
-  padding:10px 14px; border-radius:999px;
-  box-shadow: var(--shadow);
-  border:1px solid rgba(2,6,23,.06);
-}
-.switch{
-  --w:42px; --h:26px;
-  position:relative; width:var(--w); height:var(--h); flex:0 0 var(--w);
-  background:#e5e7eb; border-radius:999px; transition:.25s ease;
-  box-shadow: inset 0 0 0 1px rgba(2,6,23,.06);
-}
-.switch:after{
-  content:""; position:absolute; left:3px; top:3px;
-  width:20px; height:20px; border-radius:50%;
-  background:white; box-shadow:0 2px 6px rgba(0,0,0,.15); transition:.25s ease;
-}
-.switch.is-on{background:linear-gradient(90deg,var(--brand1),var(--brand2))}
-.switch.is-on:after{transform:translateX(16px)}
-.switch:focus-visible{outline:none; box-shadow:var(--ring)}
+.brand small{ display:block; font-weight:700; opacity:.6; margin-top:-2px}
 
-/* ========= CONTAINER / PANELS ========= */
-.container{max-width:1024px; margin:16px auto; padding:0 16px 80px}
-.panel{
-  background:var(--card);
-  border:1px solid rgba(2,6,23,.06);
-  border-radius:var(--radius);
-  box-shadow:var(--shadow);
-  padding:18px;
-}
-.panel + .panel{margin-top:18px}
-.panel__title{
-  font-size:22px; font-weight:800; letter-spacing:.2px;
-  margin:4px 0 12px;
-}
-.panel__subtitle{color:var(--muted); font-size:14px}
-
-/* Inputy */
-.field{
-  display:flex; gap:12px; align-items:center; margin:12px 0 10px;
-}
-.input{
-  flex:1; height:48px; padding:0 14px; font-size:16px;
-  border-radius:12px; border:1px solid rgba(2,6,23,.12);
-  background:var(--bg-soft);
-  outline:none; transition:border-color .2s, box-shadow .2s;
-}
-.input::placeholder{color:#9aa3af}
-.input:focus{border-color:var(--accent); box-shadow:var(--ring)}
-
-/* CTA */
-.btn{
-  height:48px; padding:0 18px; border:0; border-radius:14px;
-  font-weight:700; font-size:16px; cursor:pointer;
-  transition:transform .04s ease, box-shadow .2s ease, opacity .2s ease;
-  white-space:nowrap;
-}
-.btn:active{transform:translateY(1px)}
-.btn-primary{
-  color:white;
-  background:linear-gradient(135deg,var(--brand1),var(--brand2));
-  box-shadow:0 10px 24px rgba(79,140,255,.28);
-}
-.btn-primary:hover{opacity:.95}
-
-/* Checkbox štýl (sekcia skenovania) */
-.checkbox{
-  appearance:none; width:20px; height:20px; border-radius:6px;
-  display:inline-block; vertical-align:middle;
-  border:2px solid rgba(2,6,23,.25); transition:.2s;
-  background:white;
-}
-.checkbox:checked{
-  border-color:transparent;
-  background:linear-gradient(135deg,var(--brand1),var(--brand2));
-  box-shadow:0 0 0 2px white inset;
-}
-
-/* Chips – intolerancie */
-.chips{display:flex; flex-wrap:wrap; gap:10px; margin-top:8px}
-.chip{
-  padding:10px 14px; border-radius:999px; font-weight:600; font-size:14px;
-  border:1px solid rgba(2,6,23,.12); background:var(--bg-soft); color:var(--text);
-  transition:.15s; cursor:pointer; user-select:none;
-}
-.chip:hover{border-color:rgba(2,6,23,.22)}
-.chip--active{
-  background:linear-gradient(135deg,var(--brand1),var(--brand2));
-  color:#fff; border-color:transparent; box-shadow:0 10px 18px rgba(124,77,255,.18);
-}
-
-/* História / karty produktov */
+/* ====== LAYOUT ====== */
+.container{ max-width:960px; margin:0 auto; padding:20px 16px 32px }
 .card{
-  display:flex; align-items:center; justify-content:space-between;
-  background:var(--card); border:1px solid rgba(2,6,23,.06);
-  border-radius:14px; padding:14px 16px; box-shadow:var(--shadow);
+  background: color-mix(in oklch, var(--panel) 92%, #000 8%);
+  border:1px solid rgba(255,255,255,.07);
+  border-radius: var(--radius);
+  padding:16px;
+  box-shadow: var(--shadow);
 }
-.card + .card{margin-top:10px}
-.badge{
-  font-weight:800; font-size:13px; padding:8px 12px; border-radius:999px;
-  background:#fff7ed; color:#a16207; border:1px solid #fde68a;
-}
-.badge--ok{background:#ecfdf5; color:#047857; border:1px solid #a7f3d0}
-.badge--avoid{background:#fef2f2; color:#b91c1c; border:1px solid #fecaca}
-
-/* Footer text */
-.disclaimer{
-  color:var(--muted); text-align:center; font-size:14px;
-  max-width:680px; margin:28px auto 0;
+.card + .card{ margin-top:16px; }
+.card h2{
+  margin:0 0 10px; font-size:20px; letter-spacing:.2px;
 }
 
-/* Utility */
-.row{display:flex; align-items:center; gap:12px; flex-wrap:wrap}
-.grid{display:grid; gap:12px}
-@media (min-width:720px){
-  .grid-2{grid-template-columns:1fr auto}
+/* ====== OVLÁDAČE ====== */
+.btn{
+  appearance:none; border:0; cursor:pointer; font-weight:700;
+  padding:12px 16px; border-radius:12px;
+  background: linear-gradient(135deg, var(--brand), color-mix(in oklch, var(--brand) 55%, #fff 20%));
+  color:#fff; box-shadow: 0 6px 18px color-mix(in oklch, var(--brand) 35%, transparent);
+}
+.btn:active{ transform:translateY(1px) scale(.98) }
+.btn.secondary{
+  background: transparent; color: var(--ink);
+  border:1px solid rgba(255,255,255,.12)
 }
 
-/* Nice focus for anything clickable */
-button:focus-visible, [role="button"]:focus-visible, .chip:focus-visible, .card:focus-visible{
-  outline:none; box-shadow:var(--ring);
-  border-color:transparent;
+.input, .chip{
+  border:1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.03);
+  color:var(--ink); border-radius:12px; padding:12px 14px; outline:none;
+}
+.input:focus{ box-shadow: var(--ring); border-color: color-mix(in oklch, var(--brand) 45%, transparent) }
+
+.chips{ display:flex; flex-wrap:wrap; gap:8px }
+.chip{ padding:10px 14px }
+.chip.active{
+  background:color-mix(in oklch, var(--brand) 18%, transparent);
+  border-color: color-mix(in oklch, var(--brand) 40%, transparent);
 }
 
-/* Small helper for hidden labels but accessible */
-.visually-hidden{
-  position:absolute !important; height:1px; width:1px; overflow:hidden;
-  clip:rect(1px,1px,1px,1px); white-space:nowrap; clip-path:inset(50%);
+/* ====== STAVOVÉ BADGE ====== */
+.badge{ font-weight:700; padding:6px 10px; border-radius:999px; display:inline-flex; align-items:center; gap:6px; font-size:13px }
+.badge.maybe{ background: color-mix(in oklch, var(--warn) 20%, transparent); color:#ffe7a6; border:1px solid color-mix(in oklch, var(--warn) 45%, transparent) }
+.badge.safe{ background: color-mix(in oklch, var(--ok) 22%, transparent); color:#cef7ea; border:1px solid color-mix(in oklch, var(--ok) 45%, transparent) }
+.badge.avoid{ background: color-mix(in oklch, var(--bad) 18%, transparent); color:#ffd0d0; border:1px solid color-mix(in oklch, var(--bad) 42%, transparent) }
+
+/* ====== KAMERA (LANDSCAPE 16:9) ====== */
+.camera-card{ padding:0; overflow:hidden }
+.camera-head{ padding:14px 16px 0 }
+.camera-wrap{
+  margin:12px 12px 16px; border-radius:14px; overflow:hidden; position:relative;
+  background:#000; border:1px solid rgba(255,255,255,.1);
+  aspect-ratio: 16 / 9;     /* nútime horizontálny pomer strán */
 }
+.camera-wrap video{
+  width:100%; height:100%;
+  object-fit: cover;        /* vyplň, prebytok orež */
+  transform: rotate(0deg);  /* nič nerotujeme, iba orežeme do 16:9 */
+}
+.scan-guides{
+  position:absolute; inset:0; pointer-events:none;
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,.15),
+              inset 0 0 0 120px rgba(0,0,0,.15);
+  border-radius:12px;
+}
+.scan-line{
+  position:absolute; left:10%; right:10%; top:50%; height:2px; translate:0 -1px;
+  background: linear-gradient(90deg, transparent, rgba(124,92,255,.8), transparent);
+  box-shadow:0 0 16px rgba(124,92,255,.6);
+}
+
+/* ====== GRID drobnosti ====== */
+.row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center }
+.row .grow{ flex:1 1 240px }
+.kv{ display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:center }
+.mono{ color:var(--ink-dim); font-size:13px }
+.footer-note{ color:var(--ink-dim); text-align:center; margin:18px auto 28px; max-width:620px }
