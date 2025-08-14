@@ -1,4 +1,3 @@
-// src/App.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./styles.css";
 import {
@@ -41,15 +40,12 @@ const LS_KEYS = {
 };
 
 export default function App() {
-  // --- camera ---
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
 
   const [cameraOn, setCameraOn] = useState(false);
-
-  // --- ui / data ---
   const [ean, setEan] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ScanResult | null>(null);
@@ -59,16 +55,13 @@ export default function App() {
     intolerances: ["lepok"],
   });
 
-  // ---------- init from localStorage ----------
   useEffect(() => {
     try {
       const p = localStorage.getItem(LS_KEYS.profile);
       if (p) setProfile(JSON.parse(p));
       const h = localStorage.getItem(LS_KEYS.history);
       if (h) setHistory(JSON.parse(h));
-    } catch {
-      /* ignore */
-    }
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -79,11 +72,9 @@ export default function App() {
     localStorage.setItem(LS_KEYS.history, JSON.stringify(history.slice(0, 20)));
   }, [history]);
 
-  // ---------- camera on/off ----------
   const startCamera = async () => {
     if (!videoRef.current) return;
 
-    // požiadame o stream so šírkou 1280x720 (16:9)
     const constraints: MediaStreamConstraints = {
       video: {
         facingMode: { ideal: "environment" },
@@ -101,7 +92,6 @@ export default function App() {
     v.srcObject = stream;
     await v.play();
 
-    // niektoré zariadenia lepšie reagujú na priamy applyConstraints
     try {
       const [track] = stream.getVideoTracks();
       await track.applyConstraints({
@@ -109,22 +99,17 @@ export default function App() {
         height: { ideal: 720 },
         aspectRatio: 16 / 9,
       } as MediaTrackConstraints);
-    } catch {
-      /* optional */
-    }
+    } catch {}
 
-    // ZXing – kontinuálne dekódovanie s kontrolami
     readerRef.current = new BrowserMultiFormatReader();
     controlsRef.current = await readerRef.current.decodeFromVideoDevice(
-      null,
+      undefined, // <-- FIX: bolo `null`
       v,
       (res, err) => {
         if (res) {
           const code = res.getText();
           setEan(code);
-          // pri prvom zásahu necháme užívateľa kliknúť na Vyhľadať,
-          // aby mal kontrolu; ak chceš auto-lookup, odkomentuj:
-          // handleLookup(code);
+          // prípadne: handleLookup(code);
         }
       }
     );
@@ -146,12 +131,10 @@ export default function App() {
   useEffect(() => {
     if (cameraOn) startCamera().catch(() => setCameraOn(false));
     else stopCamera();
-    // cleanup on unmount
     return () => stopCamera();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraOn]);
 
-  // ---------- Open Food Facts fetch ----------
   async function fetchOFF(code: string) {
     try {
       const resp = await fetch(
@@ -204,7 +187,6 @@ export default function App() {
     }
   }
 
-  // ---------- AI evaluate (/api/eval) ----------
   async function evaluateWithAI(payload: {
     code: string;
     name: string;
@@ -225,7 +207,6 @@ export default function App() {
         return { status: "maybe", notes: ["AI požiadavka zlyhala."] };
       }
       const data = await resp.json();
-      // očakávame { ok: true, status: 'safe'|'avoid'|'maybe', notes: string[] }
       if (data?.status === "safe" || data?.status === "avoid")
         return { status: data.status, notes: data.notes || [] };
       return { status: "maybe", notes: data?.notes || [] };
@@ -234,7 +215,6 @@ export default function App() {
     }
   }
 
-  // ---------- hlavná akcia Vyhľadať ----------
   const handleLookup = async (forced?: string) => {
     const code = (forced || ean).trim();
     if (!code) return;
@@ -244,15 +224,12 @@ export default function App() {
 
     const off = await fetchOFF(code);
 
-    // predvyplň názov/brand ak máme
     let name = off?.name || "";
     let brand = off?.brand || "";
 
-    // základný výstup – default "maybe"
     let status: Status = "maybe";
     const notes: string[] = [];
 
-    // heuristiky: ak OFF obsahuje jasný alergén z profilu
     if (off?.allergens?.length) {
       const hit = off.allergens.find((a) =>
         profile.intolerances.some((t) =>
@@ -265,7 +242,6 @@ export default function App() {
       }
     }
 
-    // ak stále nejasné, požiadame AI
     if (status === "maybe") {
       const ai = await evaluateWithAI({
         code,
@@ -305,7 +281,6 @@ export default function App() {
 
   return (
     <>
-      {/* HEADER */}
       <header className="app-header">
         <div className="wrap">
           <div>
@@ -327,7 +302,6 @@ export default function App() {
       </header>
 
       <main className="container">
-        {/* CAMERA */}
         <section className="card camera-card">
           <div className="camera-head">
             <h2>Kamera</h2>
@@ -342,7 +316,6 @@ export default function App() {
           </div>
         </section>
 
-        {/* SCAN PANEL */}
         <section className="card">
           <h2>Skenovanie čiarového kódu</h2>
           <div className="row">
@@ -367,7 +340,6 @@ export default function App() {
           </p>
         </section>
 
-        {/* PROFILE */}
         <section className="card">
           <h2>Môj profil</h2>
 
@@ -405,7 +377,6 @@ export default function App() {
           </div>
         </section>
 
-        {/* RESULT */}
         {result && (
           <section className="card">
             <h2>Výsledok</h2>
@@ -435,7 +406,6 @@ export default function App() {
           </section>
         )}
 
-        {/* HISTORY */}
         <section className="card">
           <div className="row" style={{ justifyContent: "space-between" }}>
             <h2>Posledné skeny</h2>
@@ -481,7 +451,7 @@ export default function App() {
                     {h.status === "safe"
                       ? "Bezpečné"
                       : h.status === "avoid"
-                      ? "Neisté" // historické označenie – nechávaš si po starom
+                      ? "Neisté"
                       : "Neisté"}
                   </span>
                 </div>
